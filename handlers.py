@@ -969,6 +969,22 @@ async def submit_report(callback: CallbackQuery, state: FSMContext, bot: Bot, is
     )
     db.set_admin_message(report_id, sent_caption.chat.id, sent_caption.message_id)
 
+    # انتشار جداگانه گزارش‌های موش در کانال عملیاتی، بدون اطلاعات هویتی یا شرح آزاد شهروند
+    if data.get("category") == CATEGORIES.get("rats") and config.RODENT_REPORT_CHANNEL_ID:
+        try:
+            await bot.send_message(
+                chat_id=config.RODENT_REPORT_CHANNEL_ID,
+                text=(
+                    f"🐀 گزارش جدید کنترل موش — {code}\\n\\n"
+                    f"دسته‌بندی: {CATEGORIES.get('rats')}\\n"
+                    f"وضعیت: {db.STATUS_RECEIVED}\\n\\n"
+                    "گزارش برای پیگیری در سامانه ثبت شده است."
+                ),
+            )
+        except Exception as exc:
+            # خطای کانال نباید مانع ثبت گزارش شهروند شود.
+            print(f"ارسال گزارش {code} به کانال کنترل موش ناموفق بود: {exc}")
+
     if callback.message is not None:
         if is_social:
             await callback.message.edit_text(

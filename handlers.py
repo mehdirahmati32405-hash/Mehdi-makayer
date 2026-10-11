@@ -975,9 +975,9 @@ async def submit_report(callback: CallbackQuery, state: FSMContext, bot: Bot, is
             await bot.send_message(
                 chat_id=config.RODENT_REPORT_CHANNEL_ID,
                 text=(
-                    f"🐀 گزارش جدید کنترل موش — {code}\\n\\n"
-                    f"دسته‌بندی: {CATEGORIES.get('rats')}\\n"
-                    f"وضعیت: {db.STATUS_RECEIVED}\\n\\n"
+                    f"🐀 گزارش جدید کنترل موش — {code}\n\n"
+                    f"دسته‌بندی: {CATEGORIES.get('rats')}\n"
+                    f"وضعیت: {db.STATUS_RECEIVED}\n\n"
                     "گزارش برای پیگیری در سامانه ثبت شده است."
                 ),
             )

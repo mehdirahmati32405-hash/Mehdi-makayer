@@ -1,4 +1,3 @@
-import os
 from typing import Any
 
 import aiohttp
@@ -14,23 +13,27 @@ def enabled() -> bool:
     return bool(SUPABASE_URL and SUPABASE_KEY)
 
 
-async def _rpc(function_name: str, payload: dict[str, Any]) -> Any:
-    if not enabled():
-        return None
-
-    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/rpc/{function_name}"
-    headers = {
+def _headers() -> dict[str, str]:
+    return {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
     }
 
+
+async def _rpc(function_name: str, payload: dict[str, Any] | None = None) -> Any:
+    if not enabled():
+        return None
+
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/rpc/{function_name}"
     timeout = aiohttp.ClientTimeout(total=15)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(url, json=payload, headers=headers) as response:
+        async with session.post(url, json=payload or {}, headers=_headers()) as response:
             body = await response.text()
             if response.status >= 400:
-                raise RuntimeError(f"Supabase RPC {function_name} failed ({response.status}): {body[:500]}")
+                raise RuntimeError(
+                    f"Supabase RPC {function_name} failed ({response.status}): {body[:500]}"
+                )
             if not body:
                 return None
             return await response.json(content_type=None)
@@ -68,7 +71,11 @@ async def ingest_report(
     return None
 
 
-async def sync_status(external_ref: str | None, status_key: str, feedback: str | None = None) -> bool:
+async def sync_status(
+    external_ref: str | None,
+    status_key: str,
+    feedback: str | None = None,
+) -> bool:
     if not external_ref:
         return False
     result = await _rpc(
@@ -77,6 +84,29 @@ async def sync_status(external_ref: str | None, status_key: str, feedback: str |
             "p_external_ref": external_ref,
             "p_status": status_key,
             "p_feedback": feedback,
+        },
+    )
+    return bool(result)
+
+
+async def get_status_changes() -> list[dict[str, Any]]:
+    result = await _rpc("get_telegram_status_changes")
+    return result if isinstance(result, list) else []
+
+
+async def mark_synced(
+    report_id: str,
+    status: str,
+    admin_chat_id: int | None = None,
+    admin_message_id: int | None = None,
+) -> bool:
+    result = await _rpc(
+        "mark_telegram_report_synced",
+        {
+            "p_report_id": report_id,
+            "p_status": status,
+            "p_admin_chat_id": admin_chat_id,
+            "p_admin_message_id": admin_message_id,
         },
     )
     return bool(result)

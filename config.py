@@ -24,6 +24,13 @@ ADMIN_GROUP_ID = int(ADMIN_GROUP_ID_RAW)
 RODENT_REPORT_CHANNEL_ID_RAW = os.getenv("RODENT_REPORT_CHANNEL_ID")
 RODENT_REPORT_CHANNEL_ID = int(RODENT_REPORT_CHANNEL_ID_RAW) if RODENT_REPORT_CHANNEL_ID_RAW else None
 
+# کلید OpenAI برای دستیار هوشمند ربات.
+# فقط در Environment Variables هاست قرار بگیرد و هرگز داخل کد یا پیام عمومی نوشته نشود.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+
+# handlers.py فعلاً این نام قدیمی را به دستیار می‌دهد؛ برای سازگاری نگه داشته شده است.
+DEEPSEEK_API_KEY = OPENAI_API_KEY
+
 # اتصال امن سمت سرور به پنل مدیریت Supabase.
 # این مقدار هرگز نباید در کد یا مرورگر قرار بگیرد.
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://aoafbwnqjyocbyyknkhh.supabase.co")

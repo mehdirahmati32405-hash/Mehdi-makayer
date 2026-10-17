@@ -6,7 +6,7 @@ library only.
 
 Environment variables:
     OPENAI_API_KEY   Required
-    OPENAI_MODEL     Optional; defaults to gpt-5.6-luna
+    OPENAI_MODEL     Optional; defaults to gpt-6-luna
 """
 
 import asyncio
@@ -16,7 +16,7 @@ from urllib import request
 from urllib.error import HTTPError, URLError
 
 OPENAI_API_URL = "https://api.openai.com/v1/responses"
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-6-luna").strip()
 
 REQUEST_TIMEOUT_SECONDS = 35
 MAX_ANSWER_TOKENS = 700
@@ -173,19 +173,3 @@ async def ask_ai(
         key,
         system_prompt,
     )
-
-
-# Compatibility with the current handlers.py:
-# handlers.py may still pass config.DEEPSEEK_API_KEY.
-# We intentionally map that name to OPENAI_API_KEY so no DeepSeek request is made.
-try:
-    import config as _config
-
-    if not hasattr(_config, "DEEPSEEK_API_KEY"):
-        setattr(
-            _config,
-            "DEEPSEEK_API_KEY",
-            os.getenv("OPENAI_API_KEY", "").strip(),
-        )
-except Exception:
-    pass

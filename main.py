@@ -13,6 +13,7 @@ import db
 from callback_security import CallbackSecurityMiddleware
 from report_dedup import ConfirmationDedupMiddleware
 from handlers import router
+from ai_memory_router import router as ai_memory_router
 from location_handlers_smart import location_router
 from location_admin import location_admin_router
 from location_db_upgrade import init_location_db
@@ -40,6 +41,7 @@ async def set_commands(bot: Bot) -> None:
         BotCommand(command="subscribe", description="عضویت در اطلاعیه‌های مهم"),
         BotCommand(command="unsubscribe", description="لغو اشتراک اطلاعیه‌ها"),
         BotCommand(command="ask", description="پرسش هوشمند از ربات"),
+        BotCommand(command="newchat", description="شروع گفت‌وگوی هوشمند جدید"),
         BotCommand(command="stats", description="آمار کلی گزارش‌ها"),
         BotCommand(command="location_report", description="ثبت گزارش موش و سگ با موقعیت مکانی"),
         BotCommand(command="cancel", description="لغو عملیات جاری"),
@@ -58,10 +60,7 @@ async def set_commands(bot: Bot) -> None:
     ]
 
     try:
-        await bot.set_my_commands(
-            admin_commands,
-            scope=BotCommandScopeChat(chat_id=config.ADMIN_GROUP_ID),
-        )
+        await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=config.ADMIN_GROUP_ID))
     except Exception:
         logging.warning("تنظیم دستورات ویژه گروه ادمین ممکن نشد.")
 
@@ -70,11 +69,9 @@ async def reminder_loop(bot: Bot) -> None:
     while True:
         try:
             stale_reports = db.get_stale_reports(hours=REMINDER_STALE_HOURS)
-
             for report in stale_reports:
                 if not report["admin_chat_id"] or not report["admin_message_id"]:
                     continue
-
                 try:
                     await bot.send_message(
                         chat_id=report["admin_chat_id"],
@@ -87,14 +84,9 @@ async def reminder_loop(bot: Bot) -> None:
                     )
                     db.mark_reminded(report["id"])
                 except Exception:
-                    logging.exception(
-                        "ارسال یادآوری برای گزارش %s ناموفق بود.",
-                        report["id"],
-                    )
-
+                    logging.exception("ارسال یادآوری برای گزارش %s ناموفق بود.", report["id"])
         except Exception:
             logging.exception("خطا در بررسی گزارش‌های راکد.")
-
         await asyncio.sleep(REMINDER_CHECK_INTERVAL_SECONDS)
 
 
@@ -104,47 +96,27 @@ async def weekly_summary_loop(bot: Bot) -> None:
             now = datetime.now(timezone.utc)
             already_sent_key = db.get_state("last_weekly_summary_date")
             today_str = now.strftime("%Y-%m-%d")
-
-            if (
-                now.weekday() == WEEKLY_SUMMARY_WEEKDAY
-                and now.hour == WEEKLY_SUMMARY_HOUR_UTC
-                and already_sent_key != today_str
-            ):
+            if now.weekday() == WEEKLY_SUMMARY_WEEKDAY and now.hour == WEEKLY_SUMMARY_HOUR_UTC and already_sent_key != today_str:
                 stats = db.get_period_stats(days=7)
                 top_reporters = db.get_top_reporters(days=30, limit=5)
-
                 lines = [
                     "📊 گزارش هفتگی خودکار — عملکرد ربات گزارش شهروندی\n",
                     f"گزارش‌های ثبت‌شده در ۷ روز اخیر: {stats['total']}",
                     f"رسیدگی‌شده از همین بازه: {stats['done']}",
                 ]
-
                 if stats["top_category"]:
-                    lines.append(
-                        f"پرتکرارترین دسته: {stats['top_category']} "
-                        f"({stats['top_category_count']} مورد)"
-                    )
-
+                    lines.append(f"پرتکرارترین دسته: {stats['top_category']} ({stats['top_category_count']} مورد)")
                 if top_reporters:
                     lines.append("\n🌟 فعال‌ترین شهروندان (۳۰ روز اخیر):")
                     for i, reporter in enumerate(top_reporters, start=1):
-                        lines.append(
-                            f"{i}. {reporter['user_name']} — "
-                            f"{reporter['c']} گزارش"
-                        )
-
+                        lines.append(f"{i}. {reporter['user_name']} — {reporter['c']} گزارش")
                 try:
-                    await bot.send_message(
-                        chat_id=config.ADMIN_GROUP_ID,
-                        text="\n".join(lines),
-                    )
+                    await bot.send_message(chat_id=config.ADMIN_GROUP_ID, text="\n".join(lines))
                     db.set_state("last_weekly_summary_date", today_str)
                 except Exception:
                     logging.exception("ارسال گزارش هفتگی ناموفق بود.")
-
         except Exception:
             logging.exception("خطا در بررسی زمان‌بندی گزارش هفتگی.")
-
         await asyncio.sleep(WEEKLY_SUMMARY_CHECK_INTERVAL_SECONDS)
 
 
@@ -155,53 +127,31 @@ async def seasonal_reminder_loop(bot: Bot) -> None:
             current_season = SEASON_BY_MONTH[now.month]
             season_key = f"{current_season}-{now.year}"
             last_sent = db.get_state("last_season_reminder")
-
             if last_sent != season_key:
-                text = SEASON_TEXTS[current_season]
-
                 try:
-                    await bot.send_message(
-                        chat_id=config.ADMIN_GROUP_ID,
-                        text=text,
-                    )
+                    await bot.send_message(chat_id=config.ADMIN_GROUP_ID, text=SEASON_TEXTS[current_season])
                     db.set_state("last_season_reminder", season_key)
                 except Exception:
                     logging.exception("ارسال پیام فصلی ناموفق بود.")
-
         except Exception:
             logging.exception("خطا در بررسی پیام فصلی.")
-
         await asyncio.sleep(SEASONAL_CHECK_INTERVAL_SECONDS)
 
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
-
     db.init_db()
     init_location_db()
 
-    bot = Bot(
-        token=config.BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
-
+    bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     await set_commands(bot)
 
     dispatcher = Dispatcher(storage=MemoryStorage())
-
-    # ضد ثبت تکراری گزارش:
-    # اگر دکمه «ارسال گزارش» سریع چند بار لمس شود، فقط اولین callback
-    # وارد submit_report() می‌شود.
-    dispatcher.callback_query.outer_middleware(
-        ConfirmationDedupMiddleware(ttl_seconds=180)
-    )
-
-    # کنترل امنیتی دکمه‌های مدیریتی و بازخورد شهروند.
+    dispatcher.callback_query.outer_middleware(ConfirmationDedupMiddleware(ttl_seconds=180))
     dispatcher.callback_query.outer_middleware(CallbackSecurityMiddleware())
 
-    # اتصال ربات به پنل مدیریتی عمداً در این مرحله غیرفعال است.
-    # پس از پایدار شدن کامل ربات دوباره فعال خواهد شد.
-
+    # دستیار مکالمه‌ای قبل از handler قدیمی AI قرار می‌گیرد تا حافظه مکالمه فعال باشد.
+    dispatcher.include_router(ai_memory_router)
     dispatcher.include_router(router)
     dispatcher.include_router(location_router)
     dispatcher.include_router(location_admin_router)

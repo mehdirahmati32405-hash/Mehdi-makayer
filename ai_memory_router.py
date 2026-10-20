@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 import ai_assistant
+import ai_analytics
 import ai_memory
 import config
 import db
@@ -17,17 +18,15 @@ router = Router()
 
 
 def _live_context(user_id: int) -> str:
-    """Provide only safe, aggregated data that the AI may use as factual bot state."""
+    """Provide safe, aggregated live data plus operational analytics."""
     stats = db.get_stats()
     period = db.get_period_stats(days=7)
     mine = db.get_reports_by_user(user_id, limit=5)
-
     my_status = "، ".join(
-        f"{db.report_code(r['id'])}: {r['status']}"
-        for r in mine
+        f"{db.report_code(r['id'])}: {r['status']}" for r in mine
     ) or "هیچ گزارش ثبت‌شده‌ای ندارد"
 
-    return (
+    basic = (
         "داده‌های واقعی سامانه در زمان پاسخ‌گویی:\n"
         f"کل گزارش‌ها: {stats['total']}\n"
         f"دریافت‌شده: {stats['received']}\n"
@@ -39,7 +38,11 @@ def _live_context(user_id: int) -> str:
         f"پرتکرارترین دسته در ۷ روز اخیر: {period['top_category'] or 'نامشخص'} "
         f"({period['top_category_count']} مورد)\n"
         f"آخرین وضعیت گزارش‌های همین شهروند: {my_status}\n"
-        "این داده‌ها فقط برای پاسخ factual استفاده شوند؛ اگر داده‌ای کافی نیست، حدس زده نشود."
+    )
+    analytics = ai_analytics.build_analytics_context(days=30)
+    return basic + "\n" + analytics + (
+        "\nاین داده‌ها فقط برای پاسخ factual و تحلیل استفاده شوند؛ "
+        "اگر داده کافی نیست، حدس زده نشود."
     )
 
 

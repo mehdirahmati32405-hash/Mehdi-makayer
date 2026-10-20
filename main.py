@@ -10,13 +10,12 @@ from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefaul
 
 import config
 import db
+from callback_security import CallbackSecurityMiddleware
 from report_dedup import ConfirmationDedupMiddleware
-from panel_sync_middleware import PanelSyncMiddleware
 from handlers import router
 from location_handlers_smart import location_router
 from location_admin import location_admin_router
 from location_db_upgrade import init_location_db
-from panel_status_loop import panel_status_loop
 from seasonal_content import SEASON_BY_MONTH, SEASON_TEXTS
 
 
@@ -170,7 +169,7 @@ async def seasonal_reminder_loop(bot: Bot) -> None:
                     logging.exception("ارسال پیام فصلی ناموفق بود.")
 
         except Exception:
-            logging.exception("خطا در بررسی زمان‌بندی پیام فصلی.")
+            logging.exception("خطا در بررسی پیام فصلی.")
 
         await asyncio.sleep(SEASONAL_CHECK_INTERVAL_SECONDS)
 
@@ -197,8 +196,11 @@ async def main() -> None:
         ConfirmationDedupMiddleware(ttl_seconds=180)
     )
 
-    # پل ربات ↔ پنل مدیریت؛ در صورت قطع Supabase، خود ربات همچنان فعال می‌ماند.
-    dispatcher.callback_query.outer_middleware(PanelSyncMiddleware())
+    # کنترل امنیتی دکمه‌های مدیریتی و بازخورد شهروند.
+    dispatcher.callback_query.outer_middleware(CallbackSecurityMiddleware())
+
+    # اتصال ربات به پنل مدیریتی عمداً در این مرحله غیرفعال است.
+    # پس از پایدار شدن کامل ربات دوباره فعال خواهد شد.
 
     dispatcher.include_router(router)
     dispatcher.include_router(location_router)
@@ -207,7 +209,6 @@ async def main() -> None:
     asyncio.create_task(reminder_loop(bot))
     asyncio.create_task(weekly_summary_loop(bot))
     asyncio.create_task(seasonal_reminder_loop(bot))
-    asyncio.create_task(panel_status_loop(bot))
 
     logging.info("ربات در حال اجراست...")
     await dispatcher.start_polling(bot)

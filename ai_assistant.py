@@ -53,6 +53,13 @@ def build_system_prompt(duties_text: str, categories: list[str]) -> str:
 - اگر سؤال نیازمند محاسبه است، محاسبه را دقیق انجام بده و واحدها را مشخص کن.
 - اگر کاربر پاسخ اجرایی می‌خواهد، در پایان یک «اقدام پیشنهادی» کوتاه ارائه کن.
 
+حافظه مکالمه:
+- پیام‌های قبلی کاربر و پاسخ‌های قبلی دستیار را به‌عنوان زمینه همین گفت‌وگو در نظر بگیر.
+- اگر کاربر گفت «این»، «آن»، «همان موضوع»، «ادامه بده» یا عبارت مشابه، ابتدا به
+  زمینه مکالمه قبلی رجوع کن و بی‌دلیل سؤال تکراری نپرس.
+- اگر موضوع گفت‌وگو عوض شد، موضوع جدید را مستقل تحلیل کن.
+- هرگز اطلاعات یک شهروند را با کاربر دیگری ترکیب نکن.
+
 سبک پاسخ:
 1. پاسخ را با نتیجه یا اصل مطلب شروع کن.
 2. در صورت نیاز از تیتر، شماره‌گذاری و بولت استفاده کن.
@@ -118,11 +125,17 @@ def _extract_response_text(data: dict) -> str:
     return "\n".join(parts).strip()
 
 
-def _call_openai(question: str, api_key: str, system_prompt: str) -> str:
+def _call_openai(question: str, api_key: str, system_prompt: str, history: list[dict] | None = None) -> str:
+    conversation = []
+    for item in (history or [])[-8:]:
+        if item.get("role") in {"user", "assistant"} and isinstance(item.get("content"), str):
+            conversation.append({"role": item["role"], "content": item["content"]})
+    conversation.append({"role": "user", "content": question})
+
     payload = {
         "model": OPENAI_MODEL,
         "instructions": system_prompt,
-        "input": question,
+        "input": conversation,
         "max_output_tokens": MAX_ANSWER_TOKENS,
     }
 
@@ -140,18 +153,12 @@ def _call_openai(question: str, api_key: str, system_prompt: str) -> str:
         with request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             raw = response.read().decode("utf-8")
             data = json.loads(raw)
-
     except HTTPError as exc:
         try:
             body = exc.read().decode("utf-8", errors="replace")
         except Exception:
             body = ""
-        logging.error(
-            "OpenAI API HTTP %s using model %s: %s",
-            exc.code,
-            OPENAI_MODEL,
-            body[:1000],
-        )
+        logging.error("OpenAI API HTTP %s using model %s: %s", exc.code, OPENAI_MODEL, body[:1000])
         return ERROR_MESSAGE
     except (URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
         logging.error("OpenAI API connection error using model %s: %s", OPENAI_MODEL, exc)
@@ -167,7 +174,12 @@ def _call_openai(question: str, api_key: str, system_prompt: str) -> str:
     return answer
 
 
-async def ask_ai(question: str, api_key: str | None, system_prompt: str) -> str:
+async def ask_ai(
+    question: str,
+    api_key: str | None,
+    system_prompt: str,
+    history: list[dict] | None = None,
+) -> str:
     key = (api_key or os.getenv("OPENAI_API_KEY", "")).strip()
     if not key:
         logging.error("OPENAI_API_KEY is empty at runtime.")
@@ -182,4 +194,5 @@ async def ask_ai(question: str, api_key: str | None, system_prompt: str) -> str:
         clean_question,
         key,
         system_prompt,
+        history,
     )

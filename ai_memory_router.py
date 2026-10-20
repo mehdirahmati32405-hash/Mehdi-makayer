@@ -1,4 +1,4 @@
-"""Conversation-aware AI router. Loaded before the legacy one-question handler."""
+"""Conversation-aware AI router with persistent memory and safe live bot context."""
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -8,11 +8,39 @@ from aiogram.types import CallbackQuery, Message
 import ai_assistant
 import ai_memory
 import config
+import db
 from categories import CATEGORIES
 from services_content import DUTIES_TEXT
 from handlers import AskAIForm
 
 router = Router()
+
+
+def _live_context(user_id: int) -> str:
+    """Provide only safe, aggregated data that the AI may use as factual bot state."""
+    stats = db.get_stats()
+    period = db.get_period_stats(days=7)
+    mine = db.get_reports_by_user(user_id, limit=5)
+
+    my_status = "، ".join(
+        f"{db.report_code(r['id'])}: {r['status']}"
+        for r in mine
+    ) or "هیچ گزارش ثبت‌شده‌ای ندارد"
+
+    return (
+        "داده‌های واقعی سامانه در زمان پاسخ‌گویی:\n"
+        f"کل گزارش‌ها: {stats['total']}\n"
+        f"دریافت‌شده: {stats['received']}\n"
+        f"در حال رسیدگی: {stats['in_progress']}\n"
+        f"رسیدگی‌شده: {stats['done']}\n"
+        f"غیرقابل بررسی: {stats['rejected']}\n"
+        f"گزارش‌های ۷ روز اخیر: {period['total']}\n"
+        f"رسیدگی‌شده در ۷ روز اخیر: {period['done']}\n"
+        f"پرتکرارترین دسته در ۷ روز اخیر: {period['top_category'] or 'نامشخص'} "
+        f"({period['top_category_count']} مورد)\n"
+        f"آخرین وضعیت گزارش‌های همین شهروند: {my_status}\n"
+        "این داده‌ها فقط برای پاسخ factual استفاده شوند؛ اگر داده‌ای کافی نیست، حدس زده نشود."
+    )
 
 
 @router.message(Command("newchat"), F.chat.type == "private")
@@ -44,20 +72,19 @@ async def process_ai_question_with_memory(message: Message, state: FSMContext) -
     thinking_msg = await message.answer("در حال بررسی تخصصی سؤال شما... ⏳")
     system_prompt = ai_assistant.build_system_prompt(DUTIES_TEXT, list(CATEGORIES.values()))
     history = ai_memory.get_history(message.from_user.id)
+    live_context = _live_context(message.from_user.id)
+
     answer = await ai_assistant.ask_ai(
         question,
         config.DEEPSEEK_API_KEY,
-        system_prompt,
+        system_prompt + "\n\n" + live_context,
         history=history,
     )
 
-    # خطاهای API را در حافظه ذخیره نکنیم تا گفت‌وگوی سالم خراب نشود.
     if not answer.startswith("متأسفانه در حال حاضر امکان پاسخ‌گویی هوشمند"):
         ai_memory.append_turn(message.from_user.id, question, answer)
 
-    await thinking_msg.edit_text(
-        answer + "\n\n💡 برای شروع گفت‌وگوی جدید: /newchat"
-    )
+    await thinking_msg.edit_text(answer + "\n\n💡 برای شروع گفت‌وگوی جدید: /newchat")
     await state.set_state(AskAIForm.waiting_question)
 
 

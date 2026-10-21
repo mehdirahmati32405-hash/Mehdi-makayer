@@ -1,0 +1,58 @@
+name: Bot integrity check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Compile Python files
+        run: python -m compileall -q .
+
+      - name: Check database layer
+        env:
+          DB_PATH: /tmp/ci_reports.db
+        run: |
+          python - <<'PY'
+          import db
+          db.init_db()
+          report_id, created = db.create_report(
+              user_id=1,
+              user_name="CI Test",
+              category="آزمایشی",
+              description="test",
+              latitude=34.30,
+              longitude=48.82,
+              photo_file_id="",
+              submission_key="ci-test-1",
+          )
+          assert created is True
+          same_id, created_again = db.create_report(
+              user_id=1,
+              user_name="CI Test",
+              category="آزمایشی",
+              description="test",
+              latitude=34.30,
+              longitude=48.82,
+              photo_file_id="",
+              submission_key="ci-test-1",
+          )
+          assert same_id == report_id
+          assert created_again is False
+          print("Database integrity check passed")
+          PY

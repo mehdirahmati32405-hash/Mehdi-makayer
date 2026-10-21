@@ -1,12 +1,17 @@
 import os
 
-# Keep CI/local test databases away from the production database.
-os.environ.setdefault("DB_PATH", "/tmp/test_reports.db")
-
-import db
+import pytest
 
 
-def test_duplicate_submission_is_ignored():
+def test_duplicate_submission_is_ignored(tmp_path, monkeypatch):
+    db_path = tmp_path / "reports.db"
+    monkeypatch.setenv("DB_PATH", str(db_path))
+
+    # db.py reads DB_PATH at import time, so reload it after setting the test path.
+    import importlib
+    import db
+    db = importlib.reload(db)
+
     db.init_db()
     key = "test-duplicate-submission"
 

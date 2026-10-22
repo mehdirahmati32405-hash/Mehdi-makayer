@@ -15,6 +15,7 @@ from report_dedup import ConfirmationDedupMiddleware
 from handlers import router
 from ai_memory_router import router as ai_memory_router
 from location_handlers_smart import location_router
+from location_handlers_gis import router as gis_location_router
 from location_admin import location_admin_router
 from location_db_upgrade import init_location_db
 from seasonal_content import SEASON_BY_MONTH, SEASON_TEXTS
@@ -140,6 +141,7 @@ async def main() -> None:
     dispatcher.callback_query.outer_middleware(CallbackSecurityMiddleware())
     dispatcher.include_router(ai_memory_router)
     dispatcher.include_router(router)
+    dispatcher.include_router(gis_location_router)
     dispatcher.include_router(location_router)
     dispatcher.include_router(location_admin_router)
     asyncio.create_task(reminder_loop(bot))

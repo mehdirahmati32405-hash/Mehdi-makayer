@@ -17,6 +17,7 @@ from ai_memory_router import router as ai_memory_router
 from location_handlers_smart import location_router
 from location_handlers_gis import router as gis_location_router
 from location_admin import location_admin_router
+from gis_boundary_admin import gis_admin_router
 from location_db_upgrade import init_location_db
 from seasonal_content import SEASON_BY_MONTH, SEASON_TEXTS
 from delivery_retry import retry_pending_admin_reports
@@ -56,6 +57,8 @@ async def set_commands(bot: Bot) -> None:
         BotCommand(command="location_admin", description="پنل مدیریت مکانی"),
         BotCommand(command="lstats", description="آمار گزارش‌های مکانی"),
         BotCommand(command="lhotspots", description="نقاط داغ مکانی"),
+        BotCommand(command="gis_status", description="بررسی وضعیت مرزهای GIS"),
+        BotCommand(command="gis_import", description="ورود مرزهای واقعی از GeoJSON"),
     ]
     try:
         await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=config.ADMIN_GROUP_ID))
@@ -144,6 +147,7 @@ async def main() -> None:
     dispatcher.include_router(gis_location_router)
     dispatcher.include_router(location_router)
     dispatcher.include_router(location_admin_router)
+    dispatcher.include_router(gis_admin_router)
     asyncio.create_task(reminder_loop(bot))
     asyncio.create_task(delivery_retry_loop(bot))
     asyncio.create_task(weekly_summary_loop(bot))

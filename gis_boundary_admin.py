@@ -95,7 +95,7 @@ async def gis_status(message: Message) -> None:
     await message.answer("\n".join(lines))
 
 
-@gis_admin_router.message(Command("gis_import"))
+@gis_admin_router.message(Command("gis_import"), F.text)
 async def gis_import_help(message: Message) -> None:
     if not _is_admin(message):
         return

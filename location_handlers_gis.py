@@ -22,16 +22,10 @@ class GISReportForm(StatesGroup):
 ISSUE_BUTTONS = {"🐀 گزارش موش": "RAT", "🐕 گزارش سگ بلاصاحب": "DOG"}
 
 def issue_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="🐀 گزارش موش")], [KeyboardButton(text="🐕 گزارش سگ بلاصاحب")]],
-        resize_keyboard=True, one_time_keyboard=True,
-    )
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🐀 گزارش موش")], [KeyboardButton(text="🐕 گزارش سگ بلاصاحب")]], resize_keyboard=True, one_time_keyboard=True)
 
 def location_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📍 ارسال موقعیت فعلی", request_location=True)], [KeyboardButton(text="❌ انصراف")]],
-        resize_keyboard=True, one_time_keyboard=True,
-    )
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📍 ارسال موقعیت فعلی", request_location=True)], [KeyboardButton(text="❌ انصراف")]], resize_keyboard=True, one_time_keyboard=True)
 
 def point_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -40,11 +34,12 @@ def point_keyboard():
         [InlineKeyboardButton(text="❌ لغو", callback_data="gispoint:cancel")],
     ])
 
-@router.message(Command("location_report"), F.chat.type == "private")
+# تست GIS با فرمان جداگانه فعال است تا روند فعلی /location_report بدون ریسک باقی بماند.
+@router.message(Command("location_report_gis"), F.chat.type == "private")
 async def start(message: Message, state: FSMContext):
     await state.clear()
     await state.set_state(GISReportForm.waiting_issue)
-    await message.answer("📍 <b>ثبت گزارش مکانی</b>\n\nابتدا نوع مشکل را انتخاب کنید:", reply_markup=issue_keyboard())
+    await message.answer("📍 <b>ثبت گزارش مکانی GIS</b>\n\nابتدا نوع مشکل را انتخاب کنید:", reply_markup=issue_keyboard())
 
 @router.message(GISReportForm.waiting_issue, F.chat.type == "private")
 async def issue(message: Message, state: FSMContext):
@@ -65,14 +60,12 @@ async def gps(message: Message, state: FSMContext):
     kind = data.get("issue_type")
     if loc is None or kind not in location_db.ISSUE_TYPES:
         await state.clear(); await message.answer("اطلاعات موقعیت ناقص است. لطفاً دوباره شروع کنید."); return
-
     lat, lon = float(loc.latitude), float(loc.longitude)
     zone = zone_resolver.zone_from_coordinates(lat, lon)
     if not zone:
         await state.clear()
         await message.answer("📍 موقعیت دریافت شد، اما هنوز محدوده واقعی GIS این نقطه در ربات تعریف نشده است.\n\nبرای جلوگیری از ثبت اشتباه، ربات آن را به M1 نسبت نمی‌دهد.")
         return
-
     await state.update_data(latitude=lat, longitude=lon, zone_code=zone["code"], zone_name=zone["name"])
     candidates = intelligence.find_duplicate_candidates(latitude=lat, longitude=lon, issue_type=kind, radius_m=150.0, limit=5)
     if candidates:
@@ -82,31 +75,23 @@ async def gps(message: Message, state: FSMContext):
         distance = p.get("distance_m", 0)
         confidence = intelligence.classify_duplicate_distance(distance)
         confidence_text = {"high":"🟢 اطمینان بالا", "medium":"🟡 اطمینان متوسط", "low":"🟠 نیازمند بررسی"}[confidence]
-        await message.answer(
-            f"🔎 <b>احتمال گزارش تکراری</b>\n\n📍 محدوده: <b>{zone['code']}</b>، {zone['name']}\n"
-            f"کد پرونده: <code>{p['code']}</code>\nفاصله: {distance} متر\n"
-            f"تشخیص: <b>{confidence_text}</b>\nگزارش‌های قبلی: <b>{int(p.get('report_count', 0))}</b>\n\nآیا همان نقطه است؟",
-            reply_markup=point_keyboard())
+        await message.answer(f"🔎 <b>احتمال گزارش تکراری</b>\n\n📍 محدوده: <b>{zone['code']}</b>، {zone['name']}\nکد پرونده: <code>{p['code']}</code>\nفاصله: {distance} متر\nتشخیص: <b>{confidence_text}</b>\nگزارش‌های قبلی: <b>{int(p.get('report_count', 0))}</b>\n\nآیا همان نقطه است؟", reply_markup=point_keyboard())
         return
-
     await state.set_state(GISReportForm.waiting_description)
     await message.answer(f"📍 موقعیت دریافت شد.\n\n<b>محدوده: {zone['code']}، {zone['name']}</b>\n\nلطفاً آدرس یا نشانی و شرح مشکل را بنویسید.")
 
 @router.callback_query(GISReportForm.waiting_point_decision, F.data == "gispoint:yes")
 async def existing(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    pid = data.get("nearby_point_id")
+    data = await state.get_data(); pid = data.get("nearby_point_id")
     if not pid:
         await callback.answer("نقطه پیدا نشد.", show_alert=True); await state.clear(); return
-    await state.update_data(point_id=pid)
-    await state.set_state(GISReportForm.waiting_description)
+    await state.update_data(point_id=pid); await state.set_state(GISReportForm.waiting_description)
     if callback.message: await callback.message.answer("✅ به همان نقطه متصل می‌شود.\n\nشرح کوتاه مشکل را بنویسید.")
     await callback.answer()
 
 @router.callback_query(GISReportForm.waiting_point_decision, F.data == "gispoint:no")
 async def new_point(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(create_new_point=True)
-    await state.set_state(GISReportForm.waiting_description)
+    await state.update_data(create_new_point=True); await state.set_state(GISReportForm.waiting_description)
     if callback.message: await callback.message.answer("➕ نقطه جدید ایجاد می‌شود.\n\nآدرس یا نشانی و شرح مشکل را بنویسید.")
     await callback.answer()
 
@@ -137,14 +122,7 @@ async def save(message: Message, state: FSMContext):
                 if row["id"] == rid: code = row["report_code"]; break
         point = location_db.get_point(pid) if pid else None
         await state.clear()
-        await message.answer(
-            "✅ <b>گزارش مکانی با موفقیت ثبت شد.</b>\n\n"
-            f"📍 محدوده: <b>{zone_code}</b>، {zone_name}\n"
-            f"📌 کد نقطه: <code>{point['code'] if point else 'بدون نقطه'}</code>\n"
-            f"🧾 کد گزارش: <code>{code or rid}</code>\n"
-            f"📌 نوع مشکل: {location_db.ISSUE_TYPES.get(kind, kind)}\n"
-            f"🌐 مختصات: {lat:.6f}, {lon:.6f}\n\nگزارش برای بررسی و اقدام اجرایی ثبت شد."
-        )
+        await message.answer("✅ <b>گزارش مکانی با موفقیت ثبت شد.</b>\n\n" + f"📍 محدوده: <b>{zone_code}</b>، {zone_name}\n" + f"📌 کد نقطه: <code>{point['code'] if point else 'بدون نقطه'}</code>\n" + f"🧾 کد گزارش: <code>{code or rid}</code>\n" + f"📌 نوع مشکل: {location_db.ISSUE_TYPES.get(kind, kind)}\n" + f"🌐 مختصات: {lat:.6f}, {lon:.6f}\n\nگزارش برای بررسی و اقدام اجرایی ثبت شد.")
     except Exception as exc:
         print(f"[location_handlers_gis] save error: {exc}")
         await state.clear(); await message.answer("متأسفانه هنگام ثبت گزارش مشکلی پیش آمد. لطفاً چند دقیقه بعد دوباره تلاش کنید.")

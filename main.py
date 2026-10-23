@@ -10,7 +10,7 @@ from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefaul
 
 import config
 import db
-import citizen_identity  # استانداردسازی کدهای شهروندی و گزارش‌ها
+import citizen_identity
 from callback_security import CallbackSecurityMiddleware
 from report_dedup import ConfirmationDedupMiddleware
 from handlers import router
@@ -34,6 +34,7 @@ DELIVERY_RETRY_INTERVAL_SECONDS = 60 * 5
 async def set_commands(bot: Bot) -> None:
     base_commands = [
         BotCommand(command="start", description="شروع / ثبت گزارش جدید"),
+        BotCommand(command="myid", description="دریافت کد شهروندی من"),
         BotCommand(command="myreports", description="گزارش‌های من"),
         BotCommand(command="khadamat", description="خدمات و اطلاعات شهرداری"),
         BotCommand(command="amoozesh", description="آموزش شهروندی"),
@@ -143,6 +144,7 @@ async def main() -> None:
     dispatcher = Dispatcher(storage=MemoryStorage())
     dispatcher.callback_query.outer_middleware(ConfirmationDedupMiddleware(ttl_seconds=180))
     dispatcher.callback_query.outer_middleware(CallbackSecurityMiddleware())
+    dispatcher.include_router(citizen_identity.router)
     dispatcher.include_router(ai_memory_router)
     dispatcher.include_router(router)
     dispatcher.include_router(gis_location_router)

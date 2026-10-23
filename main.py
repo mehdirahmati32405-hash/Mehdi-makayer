@@ -14,6 +14,7 @@ import citizen_identity
 from callback_security import CallbackSecurityMiddleware
 from report_dedup import ConfirmationDedupMiddleware
 from handlers import router
+from tracking import router as tracking_router
 from ai_memory_router import router as ai_memory_router
 from location_handlers_smart import location_router
 from location_handlers_gis import router as gis_location_router
@@ -36,6 +37,7 @@ async def set_commands(bot: Bot) -> None:
         BotCommand(command="start", description="شروع / ثبت گزارش جدید"),
         BotCommand(command="myid", description="دریافت کد شهروندی من"),
         BotCommand(command="myreports", description="گزارش‌های من"),
+        BotCommand(command="track", description="پیگیری یک گزارش"),
         BotCommand(command="khadamat", description="خدمات و اطلاعات شهرداری"),
         BotCommand(command="amoozesh", description="آموزش شهروندی"),
         BotCommand(command="quiz", description="آزمون شهروند نمونه"),
@@ -146,6 +148,7 @@ async def main() -> None:
     dispatcher.callback_query.outer_middleware(CallbackSecurityMiddleware())
     dispatcher.include_router(citizen_identity.router)
     dispatcher.include_router(ai_memory_router)
+    dispatcher.include_router(tracking_router)
     dispatcher.include_router(router)
     dispatcher.include_router(gis_location_router)
     dispatcher.include_router(location_router)

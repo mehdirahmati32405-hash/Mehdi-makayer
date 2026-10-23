@@ -10,6 +10,7 @@ from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefaul
 
 import config
 import db
+import citizen_identity  # استانداردسازی کدهای شهروندی و گزارش‌ها
 from callback_security import CallbackSecurityMiddleware
 from report_dedup import ConfirmationDedupMiddleware
 from handlers import router

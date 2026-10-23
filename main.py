@@ -32,11 +32,13 @@ WEEKLY_SUMMARY_HOUR_UTC = 5
 SEASONAL_CHECK_INTERVAL_SECONDS = 60 * 60 * 6
 DELIVERY_RETRY_INTERVAL_SECONDS = 60 * 5
 
+
 async def set_commands(bot: Bot) -> None:
     base_commands = [
         BotCommand(command="start", description="شروع / ثبت گزارش جدید"),
         BotCommand(command="myid", description="دریافت کد شهروندی من"),
         BotCommand(command="myreports", description="گزارش‌های من"),
+        BotCommand(command="cases", description="پرونده‌ها و جزئیات گزارش‌های من"),
         BotCommand(command="track", description="پیگیری یک گزارش"),
         BotCommand(command="khadamat", description="خدمات و اطلاعات شهرداری"),
         BotCommand(command="amoozesh", description="آموزش شهروندی"),
@@ -69,6 +71,7 @@ async def set_commands(bot: Bot) -> None:
     except Exception:
         logging.warning("تنظیم دستورات ویژه گروه ادمین ممکن نشد.")
 
+
 async def reminder_loop(bot: Bot) -> None:
     while True:
         try:
@@ -77,13 +80,22 @@ async def reminder_loop(bot: Bot) -> None:
                 if not report["admin_chat_id"] or not report["admin_message_id"]:
                     continue
                 try:
-                    await bot.send_message(chat_id=report["admin_chat_id"], text=(f"⏰ یادآوری: گزارش {db.report_code(report['id'])} بیش از {REMINDER_STALE_HOURS} ساعت است در وضعیت «{report['status']}» باقی مانده. لطفاً بررسی شود."), reply_to_message_id=report["admin_message_id"])
+                    await bot.send_message(
+                        chat_id=report["admin_chat_id"],
+                        text=(
+                            f"⏰ یادآوری: گزارش {db.report_code(report['id'])} بیش از "
+                            f"{REMINDER_STALE_HOURS} ساعت است در وضعیت «{report['status']}» "
+                            "باقی مانده. لطفاً بررسی شود."
+                        ),
+                        reply_to_message_id=report["admin_message_id"],
+                    )
                     db.mark_reminded(report["id"])
                 except Exception:
                     logging.exception("ارسال یادآوری برای گزارش %s ناموفق بود.", report["id"])
         except Exception:
             logging.exception("خطا در بررسی گزارش‌های راکد.")
         await asyncio.sleep(REMINDER_CHECK_INTERVAL_SECONDS)
+
 
 async def delivery_retry_loop(bot: Bot) -> None:
     while True:
@@ -95,6 +107,7 @@ async def delivery_retry_loop(bot: Bot) -> None:
             logging.exception("خطا در حلقه تلاش مجدد ارسال گزارش‌ها.")
         await asyncio.sleep(DELIVERY_RETRY_INTERVAL_SECONDS)
 
+
 async def weekly_summary_loop(bot: Bot) -> None:
     while True:
         try:
@@ -104,7 +117,11 @@ async def weekly_summary_loop(bot: Bot) -> None:
             if now.weekday() == WEEKLY_SUMMARY_WEEKDAY and now.hour == WEEKLY_SUMMARY_HOUR_UTC and already_sent_key != today_str:
                 stats = db.get_period_stats(days=7)
                 top_reporters = db.get_top_reporters(days=30, limit=5)
-                lines = ["📊 گزارش هفتگی خودکار — عملکرد ربات گزارش شهروندی\n", f"گزارش‌های ثبت‌شده در ۷ روز اخیر: {stats['total']}", f"رسیدگی‌شده از همین بازه: {stats['done']}"]
+                lines = [
+                    "📊 گزارش هفتگی خودکار — عملکرد ربات گزارش شهروندی\n",
+                    f"گزارش‌های ثبت‌شده در ۷ روز اخیر: {stats['total']}",
+                    f"رسیدگی‌شده از همین بازه: {stats['done']}",
+                ]
                 if stats["top_category"]:
                     lines.append(f"پرتکرارترین دسته: {stats['top_category']} ({stats['top_category_count']} مورد)")
                 if top_reporters:
@@ -119,6 +136,7 @@ async def weekly_summary_loop(bot: Bot) -> None:
         except Exception:
             logging.exception("خطا در بررسی زمان‌بندی گزارش هفتگی.")
         await asyncio.sleep(WEEKLY_SUMMARY_CHECK_INTERVAL_SECONDS)
+
 
 async def seasonal_reminder_loop(bot: Bot) -> None:
     while True:
@@ -136,6 +154,7 @@ async def seasonal_reminder_loop(bot: Bot) -> None:
         except Exception:
             logging.exception("خطا در بررسی پیام فصلی.")
         await asyncio.sleep(SEASONAL_CHECK_INTERVAL_SECONDS)
+
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
@@ -160,6 +179,7 @@ async def main() -> None:
     asyncio.create_task(seasonal_reminder_loop(bot))
     logging.info("ربات در حال اجراست...")
     await dispatcher.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

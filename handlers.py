@@ -228,9 +228,9 @@ async def menu_new_report(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ReportForm.waiting_media)
     if callback.message is not None:
         await callback.message.answer(
-            "📸 <b>ثبت گزارش جدید</b>\\n\\n"
+            "📸 <b>ثبت گزارش جدید</b>\n\n"
             "مرحله ۱ از ۴: یک عکس از محل بفرستید؛ می‌توانید حداکثر ۳ عکس ارسال کنید. "
-            "اگر عکس ندارید، یک پیام صوتی بفرستید و محل را توضیح دهید.\\n\\n"
+            "اگر عکس ندارید، یک پیام صوتی بفرستید و محل را توضیح دهید.\n\n"
             "برای خروج از روند ثبت گزارش، /cancel را بزنید."
         )
     await callback.answer()

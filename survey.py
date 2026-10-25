@@ -189,9 +189,26 @@ async def menu_survey(callback: CallbackQuery, bot: Bot) -> None:
 async def survey_results(message: Message) -> None:
     if message.chat.id != config.ADMIN_GROUP_ID:
         return
-    survey = _active_survey()
+    _ensure_tables()
+    raw = (message.text or "").split(maxsplit=1)
+    survey = None
+    if len(raw) > 1 and raw[1].strip().isdigit():
+        with db.get_conn() as conn:
+            survey = conn.execute(
+                "SELECT * FROM surveys WHERE id = ?", (int(raw[1].strip()),)
+            ).fetchone()
+    else:
+        survey = _active_survey()
+        if survey is None:
+            with db.get_conn() as conn:
+                survey = conn.execute(
+                    "SELECT * FROM surveys ORDER BY id DESC LIMIT 1"
+                ).fetchone()
     if survey is None:
-        await message.answer("📊 نظرسنجی فعالی وجود ندارد.")
+        await message.answer(
+            "📊 هنوز نظرسنجی‌ای ثبت نشده است.\n"
+            "برای دیدن نتایج یک نظرسنجی مشخص: /survey_results شناسه"
+        )
         return
     options = json.loads(survey["options_json"])
     counts = [0] * len(options)
@@ -206,11 +223,19 @@ async def survey_results(message: Message) -> None:
                 index = int(raw_index)
                 if 0 <= index < len(counts):
                     counts[index] += 1
-    total = sum(counts)
-    lines = [f"📊 <b>نتایج نظرسنجی</b>\n\n{survey['question']}", f"تعداد پاسخ‌ها: {total}", ""]
+    total = len(rows)
+    status = "🟢 فعال" if int(survey["is_active"]) else "⚪ بسته"
+    lines = [
+        f"📊 <b>نتایج نظرسنجی شماره {survey['id']}</b> — {status}",
+        "",
+        str(survey["question"]),
+        f"تعداد شهروندان پاسخ‌دهنده: {total}",
+        "",
+    ]
     for i, option in enumerate(options):
         percent = (counts[i] / total * 100) if total else 0
         lines.append(f"{i + 1}. {option}: <b>{counts[i]}</b> رأی ({percent:.1f}٪)")
+    lines.extend(["", "برای نتایج نظرسنجی دیگر: /survey_results شناسه"])
     await message.answer("\n".join(lines))
 
 
@@ -241,9 +266,23 @@ async def close_survey(message: Message) -> None:
     if message.chat.id != config.ADMIN_GROUP_ID:
         return
     _ensure_tables()
+    raw = (message.text or "").split(maxsplit=1)
     with db.get_conn() as conn:
-        cur = conn.execute("UPDATE surveys SET is_active = 0 WHERE is_active = 1")
-    await message.answer("🛑 نظرسنجی فعال بسته شد." if cur.rowcount else "در حال حاضر نظرسنجی فعالی وجود ندارد.")
+        if len(raw) > 1 and raw[1].strip().isdigit():
+            cur = conn.execute(
+                "UPDATE surveys SET is_active = 0 WHERE id = ? AND is_active = 1",
+                (int(raw[1].strip()),),
+            )
+        else:
+            cur = conn.execute("UPDATE surveys SET is_active = 0 WHERE is_active = 1")
+    if cur.rowcount:
+        await message.answer(
+            "🛑 نظرسنجی بسته شد. نتایج آن با دستور /survey_results قابل مشاهده است."
+        )
+    else:
+        await message.answer(
+            "نظرسنجی فعالی برای بستن پیدا نشد. برای بستن یک نظرسنجی مشخص: /survey_close شناسه"
+        )
 
 
 @router.poll_answer()

@@ -283,7 +283,7 @@ async def menu_ask_ai(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.message is not None: await callback.message.answer("🤖 سؤالتون رو درباره خدمات شهری یا نحوه کار ربات بپرسید.")
     await callback.answer()
 
-@router.message(AskAIForm.waiting_question, F.chat.type == "private", F.text)
+@router.message(AskAIForm.waiting_question, F.chat.type == "private", F.text, ~F.text.startswith("/"))
 async def process_ai_question(message: Message, state: FSMContext) -> None:
     question = message.text.strip()
     if not question: await message.answer("لطفاً یک سؤال بنویسید."); return
@@ -293,7 +293,7 @@ async def process_ai_question(message: Message, state: FSMContext) -> None:
     await thinking_msg.edit_text(answer)
     await state.clear()
 
-@router.message(AskAIForm.waiting_question, F.chat.type == "private")
+@router.message(AskAIForm.waiting_question, F.chat.type == "private", ~F.text.startswith("/"))
 async def ai_question_invalid(message: Message) -> None:
     await message.answer("لطفاً سؤالتون رو به‌صورت متن بنویید.")
 

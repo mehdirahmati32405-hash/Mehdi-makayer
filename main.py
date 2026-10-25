@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -85,15 +86,29 @@ async def reminder_loop(bot: Bot) -> None:
                 if not report["admin_chat_id"] or not report["admin_message_id"]:
                     continue
                 try:
-                    await bot.send_message(
-                        chat_id=report["admin_chat_id"],
-                        text=(
-                            f"⏰ یادآوری: گزارش {db.report_code(report['id'])} بیش از "
-                            f"{REMINDER_STALE_HOURS} ساعت است در وضعیت «{report['status']}» "
-                            "باقی مانده. لطفاً بررسی شود."
-                        ),
-                        reply_to_message_id=report["admin_message_id"],
+                    reminder_text = (
+                        f"⏰ یادآوری: گزارش {db.report_code(report['id'])} بیش از "
+                        f"{REMINDER_STALE_HOURS} ساعت است در وضعیت «{report['status']}» "
+                        "باقی مانده. لطفاً بررسی شود."
                     )
+                    try:
+                        await bot.send_message(
+                            chat_id=report["admin_chat_id"],
+                            text=reminder_text,
+                            reply_to_message_id=report["admin_message_id"],
+                        )
+                    except TelegramBadRequest as exc:
+                        # The original admin message may have been deleted or be inaccessible.
+                        if "message to be replied not found" not in str(exc).lower() and "reply message not found" not in str(exc).lower():
+                            raise
+                        logging.warning(
+                            "پیام اصلی گزارش %s پیدا نشد؛ یادآوری به‌صورت مستقل ارسال می‌شود.",
+                            report["id"],
+                        )
+                        await bot.send_message(
+                            chat_id=report["admin_chat_id"],
+                            text=reminder_text,
+                        )
                     db.mark_reminded(report["id"])
                 except Exception:
                     logging.exception("ارسال یادآوری برای گزارش %s ناموفق بود.", report["id"])

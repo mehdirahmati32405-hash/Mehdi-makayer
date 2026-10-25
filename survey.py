@@ -1,5 +1,6 @@
 """نظرسنجی‌های شهروندی با Poll واقعی تلگرام."""
 import json
+import logging
 from datetime import datetime, timezone
 
 from aiogram import F, Bot, Router
@@ -50,7 +51,9 @@ def _parse_survey(text: str) -> tuple[str, list[str]] | None:
         return None
     question = parts[0]
     options = parts[1:11]
-    if len(question) < 3 or len(options) < 2:
+    if not 3 <= len(question) <= 300 or len(options) < 2:
+        return None
+    if any(not 1 <= len(option) <= 100 for option in options):
         return None
     return question, options
 
@@ -77,22 +80,29 @@ async def _send_survey_poll(bot: Bot, survey, user_id: int) -> tuple[bool, str]:
     survey_id = int(survey["id"])
     if _already_delivered(survey_id, user_id):
         return False, "already_sent"
-    options = json.loads(survey["options_json"])
     try:
+        options = json.loads(survey["options_json"])
+        if not isinstance(options, list) or not 2 <= len(options) <= 10:
+            return False, "invalid_options"
         poll = await bot.send_poll(
             chat_id=user_id,
-            question=survey["question"],
-            options=options,
+            question=str(survey["question"]),
+            options=[str(option) for option in options],
             is_anonymous=False,
             allows_multiple_answers=False,
         )
     except Exception:
+        logging.exception("ارسال نظرسنجی %s به کاربر %s ناموفق بود.", survey_id, user_id)
         return False, "send_failed"
-    with db.get_conn() as conn:
-        conn.execute(
-            "INSERT INTO survey_deliveries(survey_id, user_id, telegram_poll_id, sent_at) VALUES (?, ?, ?, ?)",
-            (survey_id, int(user_id), poll.poll.id, datetime.now(timezone.utc).isoformat()),
-        )
+    try:
+        with db.get_conn() as conn:
+            conn.execute(
+                "INSERT INTO survey_deliveries(survey_id, user_id, telegram_poll_id, sent_at) VALUES (?, ?, ?, ?)",
+                (survey_id, int(user_id), poll.poll.id, datetime.now(timezone.utc).isoformat()),
+            )
+    except Exception:
+        logging.exception("ثبت ارسال نظرسنجی %s برای کاربر %s ناموفق بود.", survey_id, user_id)
+        return False, "db_failed"
     return True, "sent"
 
 
@@ -105,12 +115,12 @@ async def create_survey(message: Message, bot: Bot) -> None:
         await message.answer(
             "📊 <b>ساخت نظرسنجی</b>\n\n"
             "قالب:\n<code>/survey سوال | گزینه اول | گزینه دوم | گزینه سوم</code>\n\n"
-            "حداکثر ۱۰ گزینه می‌توان ثبت کرد."
+            "حداکثر ۱۰ گزینه. سؤال حداکثر ۳۰۰ و هر گزینه حداکثر ۱۰۰ نویسه."
         )
         return
     parsed = _parse_survey(raw[1])
     if parsed is None:
-        await message.answer("فرمت نظرسنجی صحیح نیست. حداقل یک سؤال و دو گزینه وارد کنید.")
+        await message.answer("فرمت نظرسنجی صحیح نیست. سؤال و حداقل دو گزینه معتبر وارد کنید.")
         return
     question, options = parsed
     _ensure_tables()
@@ -124,22 +134,23 @@ async def create_survey(message: Message, bot: Bot) -> None:
 
     subscribers = db.get_all_subscribers()
     sent = 0
+    skipped = 0
     failed = 0
+    survey = {"id": survey_id, "question": question, "options_json": json.dumps(options, ensure_ascii=False)}
     for row in subscribers:
-        ok, _ = await _send_survey_poll(
-            bot,
-            {"id": survey_id, "question": question, "options_json": json.dumps(options, ensure_ascii=False)},
-            int(row["user_id"]),
-        )
+        ok, reason = await _send_survey_poll(bot, survey, int(row["user_id"]))
         if ok:
             sent += 1
+        elif reason == "already_sent":
+            skipped += 1
         else:
             failed += 1
 
     await message.answer(
         f"📊 <b>نظرسنجی فعال شد.</b>\n\n"
         f"ارسال موفق: {sent}\n"
-        f"ارسال ناموفق/قبلی: {failed}\n"
+        f"قبلاً ارسال شده: {skipped}\n"
+        f"ارسال ناموفق: {failed}\n"
         f"شناسه نظرسنجی: {survey_id}"
     )
 
@@ -154,7 +165,7 @@ async def current_survey(message: Message, bot: Bot) -> None:
     if ok:
         await message.answer("📊 نظرسنجی فعال برای شما ارسال شد. ممنون که نظر می‌دهید. 🌹")
     elif reason == "already_sent":
-        await message.answer("✅ شما قبلاً در این نظرسنجی شرکت کرده‌اید یا نظرسنجی برایتان ارسال شده است.")
+        await message.answer("✅ شما قبلاً این نظرسنجی را دریافت کرده‌اید.")
     else:
         await message.answer("ارسال نظرسنجی انجام نشد. لطفاً کمی بعد دوباره تلاش کنید.")
 
@@ -237,26 +248,29 @@ async def close_survey(message: Message) -> None:
 
 @router.poll_answer()
 async def save_poll_answer(answer: PollAnswer) -> None:
-    _ensure_tables()
-    with db.get_conn() as conn:
-        delivery = conn.execute(
-            "SELECT survey_id, user_id FROM survey_deliveries WHERE telegram_poll_id = ?",
-            (answer.poll_id,),
-        ).fetchone()
-        if delivery is None:
-            return
-        conn.execute(
-            """
-            INSERT INTO survey_answers(survey_id, user_id, option_ids, answered_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(survey_id, user_id) DO UPDATE SET
-                option_ids = excluded.option_ids,
-                answered_at = excluded.answered_at
-            """,
-            (
-                int(delivery["survey_id"]),
-                int(answer.user.id),
-                ",".join(str(x) for x in answer.option_ids),
-                datetime.now(timezone.utc).isoformat(),
-            ),
-        )
+    try:
+        _ensure_tables()
+        with db.get_conn() as conn:
+            delivery = conn.execute(
+                "SELECT survey_id, user_id FROM survey_deliveries WHERE telegram_poll_id = ?",
+                (answer.poll_id,),
+            ).fetchone()
+            if delivery is None:
+                return
+            conn.execute(
+                """
+                INSERT INTO survey_answers(survey_id, user_id, option_ids, answered_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(survey_id, user_id) DO UPDATE SET
+                    option_ids = excluded.option_ids,
+                    answered_at = excluded.answered_at
+                """,
+                (
+                    int(delivery["survey_id"]),
+                    int(answer.user.id),
+                    ",".join(str(x) for x in answer.option_ids),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+    except Exception:
+        logging.exception("ثبت رأی نظرسنجی %s ناموفق بود.", answer.poll_id)

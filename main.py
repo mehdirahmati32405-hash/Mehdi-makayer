@@ -11,6 +11,7 @@ from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefaul
 import config
 import db
 import citizen_identity
+import survey
 from callback_security import CallbackSecurityMiddleware
 from report_dedup import ConfirmationDedupMiddleware
 from handlers import router
@@ -40,6 +41,7 @@ async def set_commands(bot: Bot) -> None:
         BotCommand(command="myreports", description="گزارش‌های من"),
         BotCommand(command="cases", description="پرونده‌ها و جزئیات گزارش‌های من"),
         BotCommand(command="track", description="پیگیری یک گزارش"),
+        BotCommand(command="survey_current", description="شرکت در نظرسنجی فعال"),
         BotCommand(command="khadamat", description="خدمات و اطلاعات شهرداری"),
         BotCommand(command="amoozesh", description="آموزش شهروندی"),
         BotCommand(command="quiz", description="آزمون شهروند نمونه"),
@@ -56,6 +58,7 @@ async def set_commands(bot: Bot) -> None:
     ]
     await bot.set_my_commands(base_commands, scope=BotCommandScopeDefault())
     admin_commands = base_commands + [
+        BotCommand(command="survey", description="ساخت و ارسال نظرسنجی شهروندی"),
         BotCommand(command="search", description="جست‌وجوی گزارش‌ها"),
         BotCommand(command="export", description="خروجی اکسل همه گزارش‌ها"),
         BotCommand(command="hotspots", description="نقاط داغ گزارش‌های باز"),
@@ -166,6 +169,7 @@ async def main() -> None:
     dispatcher.callback_query.outer_middleware(ConfirmationDedupMiddleware(ttl_seconds=180))
     dispatcher.callback_query.outer_middleware(CallbackSecurityMiddleware())
     dispatcher.include_router(citizen_identity.router)
+    dispatcher.include_router(survey.router)
     dispatcher.include_router(ai_memory_router)
     dispatcher.include_router(tracking_router)
     dispatcher.include_router(router)

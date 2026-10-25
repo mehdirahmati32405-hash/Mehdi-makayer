@@ -14,8 +14,7 @@ router = Router()
 
 def _ensure_tables() -> None:
     with db.get_conn() as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS surveys (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 question TEXT NOT NULL,
@@ -23,10 +22,8 @@ def _ensure_tables() -> None:
                 created_at TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1
             )
-            """
-        )
-        conn.execute(
-            """
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS survey_deliveries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 survey_id INTEGER NOT NULL,
@@ -34,10 +31,8 @@ def _ensure_tables() -> None:
                 telegram_poll_id TEXT UNIQUE NOT NULL,
                 sent_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS survey_answers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 survey_id INTEGER NOT NULL,
@@ -46,8 +41,7 @@ def _ensure_tables() -> None:
                 answered_at TEXT NOT NULL,
                 UNIQUE(survey_id, user_id)
             )
-            """
-        )
+        """)
 
 
 def _parse_survey(text: str) -> tuple[str, list[str]] | None:
@@ -69,7 +63,20 @@ def _active_survey():
         ).fetchone()
 
 
-async def _send_survey_poll(bot: Bot, survey, user_id: int) -> bool:
+def _already_delivered(survey_id: int, user_id: int) -> bool:
+    _ensure_tables()
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM survey_deliveries WHERE survey_id = ? AND user_id = ? LIMIT 1",
+            (survey_id, user_id),
+        ).fetchone()
+    return row is not None
+
+
+async def _send_survey_poll(bot: Bot, survey, user_id: int) -> tuple[bool, str]:
+    survey_id = int(survey["id"])
+    if _already_delivered(survey_id, user_id):
+        return False, "already_sent"
     options = json.loads(survey["options_json"])
     try:
         poll = await bot.send_poll(
@@ -80,13 +87,13 @@ async def _send_survey_poll(bot: Bot, survey, user_id: int) -> bool:
             allows_multiple_answers=False,
         )
     except Exception:
-        return False
+        return False, "send_failed"
     with db.get_conn() as conn:
         conn.execute(
             "INSERT INTO survey_deliveries(survey_id, user_id, telegram_poll_id, sent_at) VALUES (?, ?, ?, ?)",
-            (int(survey["id"]), int(user_id), poll.poll.id, datetime.now(timezone.utc).isoformat()),
+            (survey_id, int(user_id), poll.poll.id, datetime.now(timezone.utc).isoformat()),
         )
-    return True
+    return True, "sent"
 
 
 @router.message(Command("survey"))
@@ -119,7 +126,12 @@ async def create_survey(message: Message, bot: Bot) -> None:
     sent = 0
     failed = 0
     for row in subscribers:
-        if await _send_survey_poll(bot, {"id": survey_id, "question": question, "options_json": json.dumps(options, ensure_ascii=False)}, int(row["user_id"])):
+        ok, _ = await _send_survey_poll(
+            bot,
+            {"id": survey_id, "question": question, "options_json": json.dumps(options, ensure_ascii=False)},
+            int(row["user_id"]),
+        )
+        if ok:
             sent += 1
         else:
             failed += 1
@@ -127,7 +139,7 @@ async def create_survey(message: Message, bot: Bot) -> None:
     await message.answer(
         f"📊 <b>نظرسنجی فعال شد.</b>\n\n"
         f"ارسال موفق: {sent}\n"
-        f"ارسال ناموفق: {failed}\n"
+        f"ارسال ناموفق/قبلی: {failed}\n"
         f"شناسه نظرسنجی: {survey_id}"
     )
 
@@ -138,8 +150,11 @@ async def current_survey(message: Message, bot: Bot) -> None:
     if survey is None:
         await message.answer("📊 در حال حاضر نظرسنجی فعالی وجود ندارد.")
         return
-    if await _send_survey_poll(bot, survey, message.from_user.id):
+    ok, reason = await _send_survey_poll(bot, survey, message.from_user.id)
+    if ok:
         await message.answer("📊 نظرسنجی فعال برای شما ارسال شد. ممنون که نظر می‌دهید. 🌹")
+    elif reason == "already_sent":
+        await message.answer("✅ شما قبلاً در این نظرسنجی شرکت کرده‌اید یا نظرسنجی برایتان ارسال شده است.")
     else:
         await message.answer("ارسال نظرسنجی انجام نشد. لطفاً کمی بعد دوباره تلاش کنید.")
 
@@ -150,8 +165,11 @@ async def menu_survey(callback: CallbackQuery, bot: Bot) -> None:
     if survey is None:
         await callback.answer("در حال حاضر نظرسنجی فعالی وجود ندارد.", show_alert=True)
         return
-    if await _send_survey_poll(bot, survey, callback.from_user.id):
+    ok, reason = await _send_survey_poll(bot, survey, callback.from_user.id)
+    if ok:
         await callback.answer("نظرسنجی برای شما ارسال شد.")
+    elif reason == "already_sent":
+        await callback.answer("شما قبلاً این نظرسنجی را دریافت کرده‌اید.", show_alert=True)
     else:
         await callback.answer("ارسال نظرسنجی ناموفق بود.", show_alert=True)
 
@@ -182,6 +200,28 @@ async def survey_results(message: Message) -> None:
     for i, option in enumerate(options):
         percent = (counts[i] / total * 100) if total else 0
         lines.append(f"{i + 1}. {option}: <b>{counts[i]}</b> رأی ({percent:.1f}٪)")
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("survey_history"))
+async def survey_history(message: Message) -> None:
+    if message.chat.id != config.ADMIN_GROUP_ID:
+        return
+    _ensure_tables()
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, question, created_at, is_active FROM surveys ORDER BY id DESC LIMIT 10"
+        ).fetchall()
+    if not rows:
+        await message.answer("📊 هنوز هیچ نظرسنجی‌ای ثبت نشده است.")
+        return
+    lines = ["📚 <b>۱۰ نظرسنجی اخیر</b>", ""]
+    for row in rows:
+        status = "🟢 فعال" if int(row["is_active"]) else "⚪ بسته"
+        question = str(row["question"]).replace("\n", " ")
+        if len(question) > 55:
+            question = question[:52] + "..."
+        lines.append(f"#{row['id']} | {status}\n{question}\n")
     await message.answer("\n".join(lines))
 
 

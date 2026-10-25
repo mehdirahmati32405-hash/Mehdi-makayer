@@ -1,9 +1,10 @@
 """نظرسنجی‌های شهروندی با Poll واقعی تلگرام."""
+import json
 from datetime import datetime, timezone
 
 from aiogram import F, Bot, Router
 from aiogram.filters import Command
-from aiogram.types import Message, PollAnswer
+from aiogram.types import CallbackQuery, Message, PollAnswer
 
 import config
 import db
@@ -19,9 +20,19 @@ def _ensure_tables() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 question TEXT NOT NULL,
                 options_json TEXT NOT NULL,
-                telegram_poll_id TEXT UNIQUE,
                 created_at TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS survey_deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                survey_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                telegram_poll_id TEXT UNIQUE NOT NULL,
+                sent_at TEXT NOT NULL
             )
             """
         )
@@ -58,6 +69,26 @@ def _active_survey():
         ).fetchone()
 
 
+async def _send_survey_poll(bot: Bot, survey, user_id: int) -> bool:
+    options = json.loads(survey["options_json"])
+    try:
+        poll = await bot.send_poll(
+            chat_id=user_id,
+            question=survey["question"],
+            options=options,
+            is_anonymous=False,
+            allows_multiple_answers=False,
+        )
+    except Exception:
+        return False
+    with db.get_conn() as conn:
+        conn.execute(
+            "INSERT INTO survey_deliveries(survey_id, user_id, telegram_poll_id, sent_at) VALUES (?, ?, ?, ?)",
+            (int(survey["id"]), int(user_id), poll.poll.id, datetime.now(timezone.utc).isoformat()),
+        )
+    return True
+
+
 @router.message(Command("survey"))
 async def create_survey(message: Message, bot: Bot) -> None:
     if message.chat.id != config.ADMIN_GROUP_ID:
@@ -76,7 +107,6 @@ async def create_survey(message: Message, bot: Bot) -> None:
         return
     question, options = parsed
     _ensure_tables()
-    import json
     with db.get_conn() as conn:
         conn.execute("UPDATE surveys SET is_active = 0 WHERE is_active = 1")
         cur = conn.execute(
@@ -85,29 +115,17 @@ async def create_survey(message: Message, bot: Bot) -> None:
         )
         survey_id = int(cur.lastrowid)
 
-    subscribers = db.get_subscribers()
+    subscribers = db.get_all_subscribers()
     sent = 0
     failed = 0
-    poll_id = None
     for row in subscribers:
-        try:
-            poll = await bot.send_poll(
-                chat_id=int(row["user_id"]),
-                question=question,
-                options=options,
-                is_anonymous=False,
-                allows_multiple_answers=False,
-            )
-            poll_id = poll.poll.id
+        if await _send_survey_poll(bot, {"id": survey_id, "question": question, "options_json": json.dumps(options, ensure_ascii=False)}, int(row["user_id"])):
             sent += 1
-        except Exception:
+        else:
             failed += 1
 
-    if poll_id:
-        with db.get_conn() as conn:
-            conn.execute("UPDATE surveys SET telegram_poll_id = ? WHERE id = ?", (poll_id, survey_id))
     await message.answer(
-        f"📊 نظرسنجی فعال شد.\n"
+        f"📊 <b>نظرسنجی فعال شد.</b>\n\n"
         f"ارسال موفق: {sent}\n"
         f"ارسال ناموفق: {failed}\n"
         f"شناسه نظرسنجی: {survey_id}"
@@ -120,26 +138,33 @@ async def current_survey(message: Message, bot: Bot) -> None:
     if survey is None:
         await message.answer("📊 در حال حاضر نظرسنجی فعالی وجود ندارد.")
         return
-    import json
-    options = json.loads(survey["options_json"])
-    await bot.send_poll(
-        chat_id=message.chat.id,
-        question=survey["question"],
-        options=options,
-        is_anonymous=False,
-        allows_multiple_answers=False,
-    )
+    if await _send_survey_poll(bot, survey, message.from_user.id):
+        await message.answer("📊 نظرسنجی فعال برای شما ارسال شد. ممنون که نظر می‌دهید. 🌹")
+    else:
+        await message.answer("ارسال نظرسنجی انجام نشد. لطفاً کمی بعد دوباره تلاش کنید.")
+
+
+@router.callback_query(F.data == "menu:survey")
+async def menu_survey(callback: CallbackQuery, bot: Bot) -> None:
+    survey = _active_survey()
+    if survey is None:
+        await callback.answer("در حال حاضر نظرسنجی فعالی وجود ندارد.", show_alert=True)
+        return
+    if await _send_survey_poll(bot, survey, callback.from_user.id):
+        await callback.answer("نظرسنجی برای شما ارسال شد.")
+    else:
+        await callback.answer("ارسال نظرسنجی ناموفق بود.", show_alert=True)
 
 
 @router.poll_answer()
 async def save_poll_answer(answer: PollAnswer) -> None:
     _ensure_tables()
     with db.get_conn() as conn:
-        survey = conn.execute(
-            "SELECT id FROM surveys WHERE telegram_poll_id = ? AND is_active = 1",
+        delivery = conn.execute(
+            "SELECT survey_id, user_id FROM survey_deliveries WHERE telegram_poll_id = ?",
             (answer.poll_id,),
         ).fetchone()
-        if survey is None:
+        if delivery is None:
             return
         conn.execute(
             """
@@ -150,7 +175,7 @@ async def save_poll_answer(answer: PollAnswer) -> None:
                 answered_at = excluded.answered_at
             """,
             (
-                int(survey["id"]),
+                int(delivery["survey_id"]),
                 int(answer.user.id),
                 ",".join(str(x) for x in answer.option_ids),
                 datetime.now(timezone.utc).isoformat(),

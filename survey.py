@@ -239,6 +239,21 @@ async def survey_results(message: Message) -> None:
     await message.answer("\n".join(lines))
 
 
+@router.message(Command("survey_templates"))
+async def survey_templates(message: Message) -> None:
+    if message.chat.id != config.ADMIN_GROUP_ID:
+        return
+    await message.answer(
+        "🧩 <b>قالب‌های آماده نظرسنجی</b>\n\n"
+        "۱) رضایت از نظافت معابر\n"
+        "<code>/survey کیفیت نظافت معابر شهر ملایر را چگونه ارزیابی می‌کنید؟ | عالی | خوب | متوسط | ضعیف</code>\n\n"
+        "۲) اولویت خدمات شهری\n"
+        "<code>/survey کدام خدمت شهری باید در اولویت قرار گیرد؟ | جمع‌آوری پسماند | نگهداری فضای سبز | رفع آب‌گرفتگی | کنترل جانوران موذی</code>\n\n"
+        "۳) رضایت از رسیدگی به گزارش‌ها\n"
+        "<code>/survey میزان رضایت شما از رسیدگی به گزارش‌های شهروندی چقدر است؟ | کاملاً راضی | راضی | تاحدی راضی | ناراضی</code>"
+    )
+
+
 @router.message(Command("survey_history"))
 async def survey_history(message: Message) -> None:
     if message.chat.id != config.ADMIN_GROUP_ID:

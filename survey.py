@@ -322,6 +322,141 @@ async def list_suggestions(message: Message) -> None:
     await message.answer("\\n".join(lines))
 
 
+@router.message(Command("monthly_report"))
+async def export_monthly_management_report(message: Message) -> None:
+    """Create a monthly Excel report suitable for municipal management review."""
+    if message.chat.id != config.ADMIN_GROUP_ID:
+        return
+    _ensure_tables()
+    from datetime import datetime, timezone
+    raw = (message.text or "").split(maxsplit=1)
+    requested_month = raw[1].strip() if len(raw) > 1 else datetime.now(timezone.utc).strftime("%Y-%m")
+    if len(requested_month) != 7 or requested_month[4:5] != "-":
+        await message.answer(
+            "فرمت ماه درست نیست. ماه را به میلادی و به شکل YYYY-MM وارد کنید.\\n"
+            "مثال: /monthly_report 2026-10"
+        )
+        return
+    try:
+        datetime.strptime(requested_month, "%Y-%m")
+    except ValueError:
+        await message.answer("ماه واردشده معتبر نیست. نمونه درست: /monthly_report 2026-10")
+        return
+    with db.get_conn() as conn:
+        reports = conn.execute(
+            "SELECT id, user_name, category, description, latitude, longitude, status, feedback, created_at "
+            "FROM reports WHERE substr(created_at, 1, 7) = ? ORDER BY created_at, id",
+            (requested_month,),
+        ).fetchall()
+        surveys = conn.execute(
+            "SELECT id, question, created_at, is_active FROM surveys "
+            "WHERE substr(created_at, 1, 7) = ? ORDER BY created_at, id",
+            (requested_month,),
+        ).fetchall()
+        survey_ids = [int(row["id"]) for row in surveys]
+        survey_rows = []
+        for row in surveys:
+            delivered = conn.execute(
+                "SELECT COUNT(DISTINCT user_id) AS n FROM survey_deliveries WHERE survey_id = ?",
+                (int(row["id"]),),
+            ).fetchone()["n"]
+            answered = conn.execute(
+                "SELECT COUNT(DISTINCT user_id) AS n FROM survey_answers WHERE survey_id = ?",
+                (int(row["id"]),),
+            ).fetchone()["n"]
+            survey_rows.append((row, int(delivered or 0), int(answered or 0)))
+        suggestions = conn.execute(
+            "SELECT id, user_name, text, created_at FROM suggestions "
+            "WHERE substr(created_at, 1, 7) = ? ORDER BY created_at, id",
+            (requested_month,),
+        ).fetchall()
+        appreciations = conn.execute(
+            "SELECT id, user_name, text, created_at FROM appreciations "
+            "WHERE substr(created_at, 1, 7) = ? ORDER BY created_at, id",
+            (requested_month,),
+        ).fetchall()
+        subscriber_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM subscribers"
+        ).fetchone()["n"]
+    workbook = Workbook()
+    overview = workbook.active
+    overview.title = "خلاصه مدیریتی"
+    overview.append(["گزارش ماهانه خدمات شهری و مشارکت شهروندان"])
+    overview.append(["ماه گزارش (میلادی)", requested_month])
+    overview.append(["تاریخ تهیه گزارش (UTC)", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")])
+    overview.append([])
+    overview.append(["شاخص", "مقدار"])
+    overview.append(["گزارش‌های ثبت‌شده شهروندان", len(reports)])
+    overview.append(["نظرسنجی‌های ایجادشده", len(surveys)])
+    overview.append(["پیشنهادهای ثبت‌شده", len(suggestions)])
+    overview.append(["پیام‌های قدردانی ثبت‌شده", len(appreciations)])
+    overview.append(["مشترکان فعلی اعلان‌ها (شاخص لحظه‌ای)", int(subscriber_count or 0)])
+    overview.append([])
+    overview.append(["وضعیت گزارش‌ها", "تعداد"])
+    status_counts = {}
+    for row in reports:
+        status = str(row["status"] or "نامشخص")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    for status, count in sorted(status_counts.items()):
+        overview.append([status, count])
+    overview.append([])
+    overview.append(["دسته‌بندی گزارش‌ها", "تعداد"])
+    category_counts = {}
+    for row in reports:
+        category = str(row["category"] or "نامشخص")
+        category_counts[category] = category_counts.get(category, 0) + 1
+    for category, count in sorted(category_counts.items()):
+        overview.append([category, count])
+    overview.append([])
+    overview.append(["شاخص نظرسنجی", "مقدار"])
+    total_delivered = sum(item[1] for item in survey_rows)
+    total_answered = sum(item[2] for item in survey_rows)
+    overview.append(["مجموع ارسال‌های ثبت‌شده نظرسنجی‌های این ماه", total_delivered])
+    overview.append(["مجموع پاسخ‌های نظرسنجی‌های این ماه", total_answered])
+    overview.append(["نرخ مشارکت تجمیعی (%)", round(total_answered / total_delivered * 100, 1) if total_delivered else 0])
+    report_sheet = workbook.create_sheet("گزارش‌های شهروندی")
+    report_sheet.append(["شناسه", "نام ثبت‌شده", "دسته‌بندی", "شرح", "عرض جغرافیایی", "طول جغرافیایی", "وضعیت", "بازخورد شهروند", "زمان ثبت (UTC)"])
+    for row in reports:
+        report_sheet.append([row["id"], row["user_name"] or "", row["category"] or "", row["description"] or "", row["latitude"], row["longitude"], row["status"] or "", row["feedback"] or "", row["created_at"] or ""])
+    survey_sheet = workbook.create_sheet("نظرسنجی‌ها")
+    survey_sheet.append(["شناسه", "پرسش", "تاریخ ایجاد (UTC)", "وضعیت", "ارسال ثبت‌شده", "پاسخ‌دهنده", "مشارکت (%)"])
+    for row, delivered, answered in survey_rows:
+        survey_sheet.append([row["id"], row["question"], row["created_at"], "فعال" if int(row["is_active"]) else "بسته", delivered, answered, round(answered / delivered * 100, 1) if delivered else 0])
+    suggestion_sheet = workbook.create_sheet("پیشنهادها")
+    suggestion_sheet.append(["شناسه", "نام ثبت‌شده", "متن پیشنهاد", "زمان ثبت (UTC)"])
+    for row in suggestions:
+        suggestion_sheet.append([row["id"], row["user_name"] or "", row["text"], row["created_at"]])
+    appreciation_sheet = workbook.create_sheet("قدردانی‌ها")
+    appreciation_sheet.append(["شناسه", "نام ثبت‌شده", "متن قدردانی", "زمان ثبت (UTC)"])
+    for row in appreciations:
+        appreciation_sheet.append([row["id"], row["user_name"] or "", row["text"], row["created_at"]])
+    from openpyxl.styles import Font, PatternFill, Alignment
+    for sheet in workbook.worksheets:
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = sheet.dimensions if sheet.max_row > 1 else "A1"
+        for cell in sheet[1]:
+            cell.font = Font(bold=True, color="FFFFFF", size=12)
+            cell.fill = PatternFill("solid", fgColor="176B5B")
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        sheet.row_dimensions[1].height = 30
+        for row in sheet.iter_rows():
+            for cell in row:
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+        for column in sheet.columns:
+            max_length = max((len(str(cell.value or "")) for cell in column), default=10)
+            sheet.column_dimensions[column[0].column_letter].width = min(max(max_length + 2, 12), 55)
+    output = BytesIO()
+    workbook.save(output)
+    await message.answer_document(
+        BufferedInputFile(output.getvalue(), filename=f"monthly_urban_services_{requested_month}.xlsx"),
+        caption=(
+            f"📊 گزارش ماهانه خدمات شهری برای {requested_month} آماده است.\\n"
+            "شامل خلاصه مدیریتی، گزارش‌ها، نظرسنجی‌ها، پیشنهادها و قدردانی‌هاست. "
+            "زمان‌ها بر اساس UTC و ماه بر اساس تقویم میلادی هستند."
+        ),
+    )
+
+
 @router.message(Command("survey_export"))
 async def export_survey_results(message: Message) -> None:
     if message.chat.id != config.ADMIN_GROUP_ID:

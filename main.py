@@ -60,6 +60,8 @@ async def set_commands(bot: Bot) -> None:
     await bot.set_my_commands(base_commands, scope=BotCommandScopeDefault())
     admin_commands = base_commands + [
         BotCommand(command="survey", description="ساخت و ارسال نظرسنجی شهروندی"),
+        BotCommand(command="survey_templates", description="قالب‌های آماده نظرسنجی"),
+        BotCommand(command="survey_stats", description="گزارش مدیریتی و درصد مشارکت"),
         BotCommand(command="survey_results", description="نتایج نظرسنجی فعال یا با شناسه"),
         BotCommand(command="survey_history", description="۱۰ نظرسنجی اخیر"),
         BotCommand(command="survey_close", description="بستن نظرسنجی فعال یا با شناسه"),

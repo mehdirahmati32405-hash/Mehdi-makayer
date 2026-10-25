@@ -254,6 +254,53 @@ async def survey_templates(message: Message) -> None:
     )
 
 
+@router.message(Command("survey_stats"))
+async def survey_stats(message: Message) -> None:
+    if message.chat.id != config.ADMIN_GROUP_ID:
+        return
+    _ensure_tables()
+    with db.get_conn() as conn:
+        surveys = conn.execute(
+            "SELECT COUNT(*) AS total, COALESCE(SUM(is_active), 0) AS active FROM surveys"
+        ).fetchone()
+        answers = conn.execute(
+            "SELECT COUNT(*) AS total FROM survey_answers"
+        ).fetchone()["total"]
+        rows = conn.execute(
+            "SELECT s.id, s.question, s.is_active, "
+            "COUNT(DISTINCT d.user_id) AS delivered, "
+            "COUNT(DISTINCT a.user_id) AS answered "
+            "FROM surveys s "
+            "LEFT JOIN survey_deliveries d ON d.survey_id = s.id "
+            "LEFT JOIN survey_answers a ON a.survey_id = s.id "
+            "GROUP BY s.id ORDER BY s.id DESC LIMIT 10"
+        ).fetchall()
+    lines = [
+        "📈 <b>گزارش مدیریتی نظرسنجی‌ها</b>",
+        "",
+        f"تعداد کل نظرسنجی‌ها: <b>{surveys['total']}</b>",
+        f"تعداد نظرسنجی‌های فعال: <b>{surveys['active']}</b>",
+        f"کل پاسخ‌های ثبت‌شده: <b>{answers}</b>",
+        "",
+        "<b>آخرین نظرسنجی‌ها و میزان مشارکت</b>",
+    ]
+    if not rows:
+        lines.append("هنوز نظرسنجی‌ای ثبت نشده است.")
+    for row in rows:
+        question = str(row["question"]).replace("\\n", " ")
+        if len(question) > 55:
+            question = question[:52] + "..."
+        delivered = int(row["delivered"] or 0)
+        answered = int(row["answered"] or 0)
+        rate = answered / delivered * 100 if delivered else 0
+        status = "فعال" if int(row["is_active"]) else "بسته"
+        lines.append(
+            f"\\n#{row['id']} — {status}\\n{question}\\n"
+            f"ارسال‌شده: {delivered} | پاسخ‌دهنده: {answered} | مشارکت: {rate:.1f}٪"
+        )
+    await message.answer("\\n".join(lines))
+
+
 @router.message(Command("survey_history"))
 async def survey_history(message: Message) -> None:
     if message.chat.id != config.ADMIN_GROUP_ID:

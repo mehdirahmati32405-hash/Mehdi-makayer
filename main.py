@@ -99,8 +99,7 @@ async def reminder_loop(bot: Bot) -> None:
                         )
                     except TelegramBadRequest as exc:
                         # The original admin message may have been deleted or be inaccessible.
-                        if "message to be replied not found" not in str(exc).lower() and "reply message not found" not in str(exc).lower():
-                            raise
+                        # Retry without reply metadata for any TelegramBadRequest on reply attempts.
                         logging.warning(
                             "پیام اصلی گزارش %s پیدا نشد؛ یادآوری به‌صورت مستقل ارسال می‌شود.",
                             report["id"],

@@ -117,12 +117,13 @@ STATUS_MAP = {"progress": db.STATUS_IN_PROGRESS, "done": db.STATUS_DONE, "reject
 
 WELCOME_TEXT = ("🏛 <b>ربات گزارش‌دهی شهروندی</b>\n<b>معاونت خدمات شهری شهرداری ملایر</b>\n\n"
 "با سلام و احترام؛\nاین ربات با هدف تسهیل ارتباط میان شهروندان گرامی و معاونت خدمات شهری راه‌اندازی شده است. از این پس می‌توانید گزارش‌های خود از قبیل زباله رهاشده، آسیب‌دیدگی فضای سبز، مشاهده سگ‌های بلاصاحب، مشاهده موش‌های فاضلابی، دفع غیراصولی نخاله‌های ساختمانی و موارد مشابه را به‌سرعت و بدون واسطه به شهرداری گزارش دهید.\n\n"
-"برای شروع، از گزینه‌های زیر استفاده کنید یا مستقیم یک عکس (یا پیام صوتی) از محل مورد نظر ارسال نمایید.\n\nمشارکت شما، گامی مؤثر در راستای شهری تمیزتر است. 🌿\n<i>(برای لغو در هر مرحله: /cancel)</i>")
+"برای استفاده از خدمات، یکی از گزینه‌های منوی زیر را انتخاب کنید. برای ثبت گزارش، ابتدا «📸 ثبت گزارش جدید» را بزنید و سپس مراحل را دنبال کنید.\n\nمشارکت شما، گامی مؤثر در راستای شهری تمیزتر است. 🌿\n<i>(برای لغو در هر مرحله: /cancel)</i>")
 
 async def send_welcome(target: Message, state: FSMContext) -> None:
+    # /start must return to a neutral state and show the full menu.
+    # Report collection starts only after the citizen explicitly selects it.
     await state.clear()
     await target.answer(WELCOME_TEXT, reply_markup=main_menu_keyboard())
-    await state.set_state(ReportForm.waiting_media)
 
 async def send_myreports(target: Message, user_id: int) -> None:
     reports = db.get_reports_by_user(user_id, limit=5)
@@ -224,9 +225,14 @@ async def cmd_hotspots(message: Message, bot: Bot) -> None:
 @router.callback_query(F.data == "menu:new_report")
 async def menu_new_report(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    if callback.message is not None:
-        await callback.message.answer("برای ثبت گزارش جدید، یک عکس از محل مورد نظر بفرستید، یا اگه راحت‌ترید، یک پیام صوتی بفرستید و توضیح بدید.")
     await state.set_state(ReportForm.waiting_media)
+    if callback.message is not None:
+        await callback.message.answer(
+            "📸 <b>ثبت گزارش جدید</b>\\n\\n"
+            "مرحله ۱ از ۴: یک عکس از محل بفرستید؛ می‌توانید حداکثر ۳ عکس ارسال کنید. "
+            "اگر عکس ندارید، یک پیام صوتی بفرستید و محل را توضیح دهید.\\n\\n"
+            "برای خروج از روند ثبت گزارش، /cancel را بزنید."
+        )
     await callback.answer()
 
 @router.callback_query(F.data == "menu:myreports")

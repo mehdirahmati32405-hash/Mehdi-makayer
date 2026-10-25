@@ -65,7 +65,7 @@ async def open_ai(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
-@router.message(AskAIForm.waiting_question, F.chat.type == "private", F.text)
+@router.message(AskAIForm.waiting_question, F.chat.type == "private", F.text, ~F.text.startswith("/"))
 async def process_ai_question_with_memory(message: Message, state: FSMContext) -> None:
     question = message.text.strip()
     if not question:
@@ -91,6 +91,6 @@ async def process_ai_question_with_memory(message: Message, state: FSMContext) -
     await state.set_state(AskAIForm.waiting_question)
 
 
-@router.message(AskAIForm.waiting_question, F.chat.type == "private")
+@router.message(AskAIForm.waiting_question, F.chat.type == "private", ~F.text.startswith("/"))
 async def ai_invalid_with_memory(message: Message) -> None:
     await message.answer("لطفاً سؤال را به‌صورت متن ارسال کنید.")

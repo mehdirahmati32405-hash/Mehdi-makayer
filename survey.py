@@ -1,14 +1,16 @@
 """نظرسنجی‌های شهروندی با Poll واقعی تلگرام."""
 import json
 import logging
+from io import BytesIO
 from datetime import datetime, timezone
 
 from aiogram import F, Bot, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message, PollAnswer
+from aiogram.types import BufferedInputFile, CallbackQuery, Message, PollAnswer
 
 import config
 import db
+from openpyxl import Workbook
 
 router = Router()
 
@@ -299,6 +301,92 @@ async def survey_stats(message: Message) -> None:
             f"ارسال‌شده: {delivered} | پاسخ‌دهنده: {answered} | مشارکت: {rate:.1f}٪"
         )
     await message.answer("\\n".join(lines))
+
+
+@router.message(Command("suggestions"))
+async def list_suggestions(message: Message) -> None:
+    if message.chat.id != config.ADMIN_GROUP_ID:
+        return
+    rows = db.get_all_suggestions(limit=30)
+    if not rows:
+        await message.answer("💡 هنوز پیشنهادی از شهروندان ثبت نشده است.")
+        return
+    lines = ["💡 <b>آخرین پیشنهادهای شهروندان</b>", ""]
+    for row in rows:
+        created = str(row["created_at"]).replace("T", " ")[:16]
+        user_name = str(row["user_name"] or "شهروند")
+        suggestion = str(row["text"]).replace("\\n", " ")
+        if len(suggestion) > 450:
+            suggestion = suggestion[:447] + "..."
+        lines.append(f"#{row['id']} | {created}\\nاز طرف: {user_name}\\n{suggestion}\\n")
+    await message.answer("\\n".join(lines))
+
+
+@router.message(Command("survey_export"))
+async def export_survey_results(message: Message) -> None:
+    if message.chat.id != config.ADMIN_GROUP_ID:
+        return
+    _ensure_tables()
+    raw = (message.text or "").split(maxsplit=1)
+    survey_id = int(raw[1].strip()) if len(raw) > 1 and raw[1].strip().isdigit() else None
+    with db.get_conn() as conn:
+        if survey_id is None:
+            survey = conn.execute(
+                "SELECT * FROM surveys ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        else:
+            survey = conn.execute(
+                "SELECT * FROM surveys WHERE id = ?", (survey_id,)
+            ).fetchone()
+        if survey is None:
+            await message.answer("برای خروجی، نظرسنجی‌ای پیدا نشد.")
+            return
+        options = json.loads(survey["options_json"])
+        answer_rows = conn.execute(
+            "SELECT user_id, option_ids, answered_at FROM survey_answers WHERE survey_id = ? ORDER BY answered_at",
+            (int(survey["id"]),),
+        ).fetchall()
+        delivery_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM survey_deliveries WHERE survey_id = ?",
+            (int(survey["id"]),),
+        ).fetchone()["n"]
+    workbook = Workbook()
+    summary = workbook.active
+    summary.title = "خلاصه"
+    summary.append(["شناسه نظرسنجی", int(survey["id"])])
+    summary.append(["پرسش", str(survey["question"])])
+    summary.append(["وضعیت", "فعال" if int(survey["is_active"]) else "بسته"])
+    summary.append(["تعداد ارسال ثبت‌شده", int(delivery_count)])
+    summary.append(["تعداد پاسخ‌دهندگان", len(answer_rows)])
+    summary.append(["درصد مشارکت", round(len(answer_rows) / delivery_count * 100, 1) if delivery_count else 0])
+    summary.append([])
+    summary.append(["گزینه", "تعداد رأی", "درصد از پاسخ‌ها"])
+    counts = [0] * len(options)
+    for row in answer_rows:
+        for raw_index in str(row["option_ids"]).split(","):
+            if raw_index.strip().isdigit():
+                idx = int(raw_index)
+                if 0 <= idx < len(counts):
+                    counts[idx] += 1
+    total_votes = sum(counts)
+    for idx, option in enumerate(options):
+        summary.append([option, counts[idx], round(counts[idx] / total_votes * 100, 1) if total_votes else 0])
+    details = workbook.create_sheet("پاسخ‌ها")
+    details.append(["شناسه شهروند", "شناسه گزینه انتخابی", "زمان پاسخ"])
+    for row in answer_rows:
+        details.append([int(row["user_id"]), str(row["option_ids"]), str(row["answered_at"])])
+    for sheet in workbook.worksheets:
+        sheet.freeze_panes = "A2"
+        for column in sheet.columns:
+            max_length = max((len(str(cell.value or "")) for cell in column), default=10)
+            sheet.column_dimensions[column[0].column_letter].width = min(max(max_length + 2, 12), 55)
+    output = BytesIO()
+    workbook.save(output)
+    filename = f"survey_{int(survey['id'])}_results.xlsx"
+    await message.answer_document(
+        BufferedInputFile(output.getvalue(), filename=filename),
+        caption=f"📊 خروجی اکسل نظرسنجی شماره {survey['id']}",
+    )
 
 
 @router.message(Command("survey_history"))

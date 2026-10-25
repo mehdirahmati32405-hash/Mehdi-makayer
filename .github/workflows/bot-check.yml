@@ -56,3 +56,60 @@ jobs:
           assert created_again is False
           print("Database integrity check passed")
           PY
+
+      - name: Check survey reporting schema and Excel support
+        env:
+          DB_PATH: /tmp/ci_survey_reports.db
+          BOT_TOKEN: "123456:TEST_TOKEN_FOR_CI"
+          ADMIN_GROUP_ID: "-1001234567890"
+        run: |
+          python - <<'PY'
+          import json
+          import db
+          import survey
+          from openpyxl import Workbook
+          db.init_db()
+          survey._ensure_tables()
+          with db.get_conn() as conn:
+              tables = {row["name"] for row in conn.execute(
+                  "SELECT name FROM sqlite_master WHERE type='table'"
+              )}
+              required = {
+                  "reports", "suggestions", "appreciations", "subscribers",
+                  "surveys", "survey_deliveries", "survey_answers",
+              }
+              missing = required - tables
+              assert not missing, f"Missing tables: {missing}"
+              conn.execute(
+                  "INSERT INTO surveys(question, options_json, created_at, is_active) VALUES (?, ?, ?, ?)",
+                  ("CI survey", json.dumps(["A", "B"], ensure_ascii=False), "2026-10-01T10:00:00+00:00", 0),
+              )
+              survey_id = conn.execute("SELECT id FROM surveys ORDER BY id DESC LIMIT 1").fetchone()["id"]
+              conn.execute(
+                  "INSERT INTO survey_deliveries(survey_id, user_id, telegram_poll_id, sent_at) VALUES (?, ?, ?, ?)",
+                  (survey_id, 1001, "ci-poll-1", "2026-10-01T10:00:00+00:00"),
+              )
+              conn.execute(
+                  "INSERT INTO survey_answers(survey_id, user_id, option_ids, answered_at) VALUES (?, ?, ?, ?)",
+                  (survey_id, 1001, "0", "2026-10-01T10:05:00+00:00"),
+              )
+              conn.execute(
+                  "INSERT INTO suggestions(user_id, user_name, text, created_at) VALUES (?, ?, ?, ?)",
+                  (1001, "CI Citizen", "Test suggestion", "2026-10-01T10:10:00+00:00"),
+              )
+              conn.execute(
+                  "INSERT INTO appreciations(user_id, user_name, text, created_at) VALUES (?, ?, ?, ?)",
+                  (1001, "CI Citizen", "Test appreciation", "2026-10-01T10:15:00+00:00"),
+              )
+              assert conn.execute("SELECT COUNT(*) FROM survey_answers WHERE survey_id=?", (survey_id,)).fetchone()[0] == 1
+          book = Workbook()
+          book.active.title = "خلاصه مدیریتی"
+          book.create_sheet("گزارش‌های شهروندی")
+          book.create_sheet("نظرسنجی‌ها")
+          book.create_sheet("پیشنهادها")
+          book.create_sheet("قدردانی‌ها")
+          assert len(book.sheetnames) == 5
+          assert hasattr(survey, "export_monthly_management_report")
+          assert hasattr(survey, "export_survey_results")
+          print("Survey schema, sample records, and Excel dependency checks passed")
+          PY

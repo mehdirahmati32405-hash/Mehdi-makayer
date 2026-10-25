@@ -156,6 +156,45 @@ async def menu_survey(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer("ارسال نظرسنجی ناموفق بود.", show_alert=True)
 
 
+@router.message(Command("survey_results"))
+async def survey_results(message: Message) -> None:
+    if message.chat.id != config.ADMIN_GROUP_ID:
+        return
+    survey = _active_survey()
+    if survey is None:
+        await message.answer("📊 نظرسنجی فعالی وجود ندارد.")
+        return
+    options = json.loads(survey["options_json"])
+    counts = [0] * len(options)
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT option_ids FROM survey_answers WHERE survey_id = ?",
+            (int(survey["id"]),),
+        ).fetchall()
+    for row in rows:
+        for raw_index in str(row["option_ids"]).split(","):
+            if raw_index.strip().isdigit():
+                index = int(raw_index)
+                if 0 <= index < len(counts):
+                    counts[index] += 1
+    total = sum(counts)
+    lines = [f"📊 <b>نتایج نظرسنجی</b>\n\n{survey['question']}", f"تعداد پاسخ‌ها: {total}", ""]
+    for i, option in enumerate(options):
+        percent = (counts[i] / total * 100) if total else 0
+        lines.append(f"{i + 1}. {option}: <b>{counts[i]}</b> رأی ({percent:.1f}٪)")
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("survey_close"))
+async def close_survey(message: Message) -> None:
+    if message.chat.id != config.ADMIN_GROUP_ID:
+        return
+    _ensure_tables()
+    with db.get_conn() as conn:
+        cur = conn.execute("UPDATE surveys SET is_active = 0 WHERE is_active = 1")
+    await message.answer("🛑 نظرسنجی فعال بسته شد." if cur.rowcount else "در حال حاضر نظرسنجی فعالی وجود ندارد.")
+
+
 @router.poll_answer()
 async def save_poll_answer(answer: PollAnswer) -> None:
     _ensure_tables()

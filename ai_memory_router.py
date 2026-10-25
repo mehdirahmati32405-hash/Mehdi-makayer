@@ -91,6 +91,6 @@ async def process_ai_question_with_memory(message: Message, state: FSMContext) -
     await state.set_state(AskAIForm.waiting_question)
 
 
-@router.message(AskAIForm.waiting_question, F.chat.type == "private", ~F.text.startswith("/"))
+@router.message(AskAIForm.waiting_question, F.chat.type == "private", F.text, ~F.text.startswith("/"))
 async def ai_invalid_with_memory(message: Message) -> None:
     await message.answer("لطفاً سؤال را به‌صورت متن ارسال کنید.")

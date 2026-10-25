@@ -63,6 +63,7 @@ async def set_commands(bot: Bot) -> None:
         BotCommand(command="survey_templates", description="قالب‌های آماده نظرسنجی"),
         BotCommand(command="survey_stats", description="گزارش مدیریتی و درصد مشارکت"),
         BotCommand(command="survey_export", description="خروجی اکسل نتایج نظرسنجی"),
+        BotCommand(command="monthly_report", description="گزارش ماهانه مدیریتی اکسل"),
         BotCommand(command="suggestions", description="مشاهده پیشنهادهای شهروندان"),
         BotCommand(command="survey_results", description="نتایج نظرسنجی فعال یا با شناسه"),
         BotCommand(command="survey_history", description="۱۰ نظرسنجی اخیر"),

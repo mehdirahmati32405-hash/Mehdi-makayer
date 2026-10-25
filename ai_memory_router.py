@@ -1,7 +1,7 @@
 """Conversation-aware AI router with persistent memory and safe live bot context."""
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -12,9 +12,15 @@ import config
 import db
 from categories import CATEGORIES
 from services_content import DUTIES_TEXT
-from handlers import AskAIForm
+from handlers import AskAIForm, send_welcome
 
 router = Router()
+
+
+@router.message(CommandStart(), F.chat.type == "private")
+async def start_from_ai_router(message: Message, state: FSMContext) -> None:
+    """Handle /start before any active AI conversation state can intercept it."""
+    await send_welcome(message, state)
 
 
 def _live_context(user_id: int) -> str:

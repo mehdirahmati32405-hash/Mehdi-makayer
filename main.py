@@ -13,7 +13,6 @@ import config
 import db
 import citizen_identity
 import survey
-import survey_activation
 from callback_security import CallbackSecurityMiddleware
 from report_dedup import ConfirmationDedupMiddleware
 from handlers import router
@@ -109,10 +108,7 @@ async def reminder_loop(bot: Bot) -> None:
                             "پیام اصلی گزارش %s پیدا نشد؛ یادآوری به‌صورت مستقل ارسال می‌شود.",
                             report["id"],
                         )
-                        await bot.send_message(
-                            chat_id=report["admin_chat_id"],
-                            text=reminder_text,
-                        )
+                        await bot.send_message(chat_id=report["admin_chat_id"], text=reminder_text)
                     db.mark_reminded(report["id"])
                 except Exception:
                     logging.exception("ارسال یادآوری برای گزارش %s ناموفق بود.", report["id"])
@@ -190,7 +186,6 @@ async def main() -> None:
     dispatcher.callback_query.outer_middleware(ConfirmationDedupMiddleware(ttl_seconds=180))
     dispatcher.callback_query.outer_middleware(CallbackSecurityMiddleware())
     dispatcher.include_router(citizen_identity.router)
-    dispatcher.include_router(survey_activation.router)
     dispatcher.include_router(survey.router)
     dispatcher.include_router(ai_memory_router)
     dispatcher.include_router(tracking_router)

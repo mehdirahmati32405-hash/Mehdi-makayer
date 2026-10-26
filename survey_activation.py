@@ -1,14 +1,12 @@
-"""فعال‌سازی نظرسنجی شهروندی از منوی اصلی و ثبت پاسخ Poll."""
+"""هسته فعال‌سازی نظرسنجی شهروندی و ثبت پاسخ Poll."""
 import json
 import logging
 from datetime import datetime, timezone
 
-from aiogram import Bot, F, Router
-from aiogram.types import CallbackQuery, PollAnswer
+from aiogram import Bot
+from aiogram.types import PollAnswer
 
 import db
-
-router = Router()
 
 DEFAULT_QUESTION = "میزان رضایت شما از خدمات شهری شهرداری ملایر چقدر است؟"
 DEFAULT_OPTIONS = ["عالی", "خوب", "متوسط", "ضعیف"]
@@ -16,42 +14,34 @@ DEFAULT_OPTIONS = ["عالی", "خوب", "متوسط", "ضعیف"]
 
 def _ensure_tables() -> None:
     with db.get_conn() as conn:
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS surveys (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                question TEXT NOT NULL,
-                options_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                is_active INTEGER NOT NULL DEFAULT 1
-            )"""
-        )
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS survey_deliveries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                survey_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                telegram_poll_id TEXT UNIQUE NOT NULL,
-                sent_at TEXT NOT NULL
-            )"""
-        )
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS survey_answers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                survey_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                option_ids TEXT NOT NULL,
-                answered_at TEXT NOT NULL,
-                UNIQUE(survey_id, user_id)
-            )"""
-        )
+        conn.execute("""CREATE TABLE IF NOT EXISTS surveys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            question TEXT NOT NULL,
+            options_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS survey_deliveries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            survey_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            telegram_poll_id TEXT UNIQUE NOT NULL,
+            sent_at TEXT NOT NULL
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS survey_answers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            survey_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            option_ids TEXT NOT NULL,
+            answered_at TEXT NOT NULL,
+            UNIQUE(survey_id, user_id)
+        )""")
 
 
-def _get_or_create_active_survey():
+def get_or_create_active_survey():
     _ensure_tables()
     with db.get_conn() as conn:
-        survey = conn.execute(
-            "SELECT * FROM surveys WHERE is_active = 1 ORDER BY id DESC LIMIT 1"
-        ).fetchone()
+        survey = conn.execute("SELECT * FROM surveys WHERE is_active = 1 ORDER BY id DESC LIMIT 1").fetchone()
         if survey is not None:
             return survey
         now = datetime.now(timezone.utc).isoformat()
@@ -59,14 +49,12 @@ def _get_or_create_active_survey():
             "INSERT INTO surveys(question, options_json, created_at, is_active) VALUES (?, ?, ?, 1)",
             (DEFAULT_QUESTION, json.dumps(DEFAULT_OPTIONS, ensure_ascii=False), now),
         )
-        return conn.execute(
-            "SELECT * FROM surveys WHERE id = ?", (int(cur.lastrowid),)
-        ).fetchone()
+        return conn.execute("SELECT * FROM surveys WHERE id = ?", (int(cur.lastrowid),)).fetchone()
 
 
-async def _send_poll(bot: Bot, survey, user_id: int) -> str:
+async def send_active_survey(bot: Bot, user_id: int) -> str:
+    survey = get_or_create_active_survey()
     survey_id = int(survey["id"])
-    _ensure_tables()
     with db.get_conn() as conn:
         delivered = conn.execute(
             "SELECT 1 FROM survey_deliveries WHERE survey_id = ? AND user_id = ? LIMIT 1",
@@ -74,7 +62,6 @@ async def _send_poll(bot: Bot, survey, user_id: int) -> str:
         ).fetchone()
     if delivered:
         return "already_sent"
-
     try:
         options = json.loads(survey["options_json"])
         poll = await bot.send_poll(
@@ -87,32 +74,14 @@ async def _send_poll(bot: Bot, survey, user_id: int) -> str:
     except Exception:
         logging.exception("ارسال نظرسنجی فعال برای کاربر %s ناموفق بود.", user_id)
         return "send_failed"
-
-    try:
-        with db.get_conn() as conn:
-            conn.execute(
-                "INSERT INTO survey_deliveries(survey_id, user_id, telegram_poll_id, sent_at) VALUES (?, ?, ?, ?)",
-                (survey_id, int(user_id), poll.poll.id, datetime.now(timezone.utc).isoformat()),
-            )
-    except Exception:
-        logging.exception("ثبت تحویل نظرسنجی %s ناموفق بود.", survey_id)
-        return "db_failed"
+    with db.get_conn() as conn:
+        conn.execute(
+            "INSERT INTO survey_deliveries(survey_id, user_id, telegram_poll_id, sent_at) VALUES (?, ?, ?, ?)",
+            (survey_id, int(user_id), poll.poll.id, datetime.now(timezone.utc).isoformat()),
+        )
     return "sent"
 
 
-@router.callback_query(F.data == "menu:survey")
-async def open_survey_from_menu(callback: CallbackQuery, bot: Bot) -> None:
-    survey = _get_or_create_active_survey()
-    reason = await _send_poll(bot, survey, callback.from_user.id)
-    if reason == "sent":
-        await callback.answer("📊 نظرسنجی برای شما ارسال شد.")
-    elif reason == "already_sent":
-        await callback.answer("✅ شما قبلاً در این نظرسنجی شرکت کرده‌اید.", show_alert=True)
-    else:
-        await callback.answer("ارسال نظرسنجی انجام نشد. لطفاً دوباره تلاش کنید.", show_alert=True)
-
-
-@router.poll_answer()
 async def save_poll_answer(answer: PollAnswer) -> None:
     if not answer.user:
         return
@@ -130,10 +99,5 @@ async def save_poll_answer(answer: PollAnswer) -> None:
                ON CONFLICT(survey_id, user_id) DO UPDATE SET
                    option_ids = excluded.option_ids,
                    answered_at = excluded.answered_at""",
-            (
-                int(delivery["survey_id"]),
-                int(answer.user.id),
-                ",".join(str(i) for i in answer.option_ids),
-                datetime.now(timezone.utc).isoformat(),
-            ),
+            (int(delivery["survey_id"]), int(answer.user.id), ",".join(str(i) for i in answer.option_ids), datetime.now(timezone.utc).isoformat()),
         )

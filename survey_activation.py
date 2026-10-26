@@ -1,12 +1,14 @@
-"""هسته فعال‌سازی نظرسنجی شهروندی و ثبت پاسخ Poll."""
+"""سرویس مشترک نظرسنجی شهروندی و ثبت پاسخ Poll."""
 import json
 import logging
 from datetime import datetime, timezone
 
-from aiogram import Bot
+from aiogram import Bot, Router
 from aiogram.types import PollAnswer
 
 import db
+
+router = Router()
 
 DEFAULT_QUESTION = "میزان رضایت شما از خدمات شهری شهرداری ملایر چقدر است؟"
 DEFAULT_OPTIONS = ["عالی", "خوب", "متوسط", "ضعیف"]
@@ -52,16 +54,17 @@ def get_or_create_active_survey():
         return conn.execute("SELECT * FROM surveys WHERE id = ?", (int(cur.lastrowid),)).fetchone()
 
 
-async def send_active_survey(bot: Bot, user_id: int) -> str:
+async def send_active_survey(bot: Bot, user_id: int, force: bool = False) -> str:
     survey = get_or_create_active_survey()
     survey_id = int(survey["id"])
-    with db.get_conn() as conn:
-        delivered = conn.execute(
-            "SELECT 1 FROM survey_deliveries WHERE survey_id = ? AND user_id = ? LIMIT 1",
-            (survey_id, int(user_id)),
-        ).fetchone()
-    if delivered:
-        return "already_sent"
+    if not force:
+        with db.get_conn() as conn:
+            delivered = conn.execute(
+                "SELECT 1 FROM survey_deliveries WHERE survey_id = ? AND user_id = ? LIMIT 1",
+                (survey_id, int(user_id)),
+            ).fetchone()
+        if delivered:
+            return "already_sent"
     try:
         options = json.loads(survey["options_json"])
         poll = await bot.send_poll(
@@ -74,14 +77,19 @@ async def send_active_survey(bot: Bot, user_id: int) -> str:
     except Exception:
         logging.exception("ارسال نظرسنجی فعال برای کاربر %s ناموفق بود.", user_id)
         return "send_failed"
-    with db.get_conn() as conn:
-        conn.execute(
-            "INSERT INTO survey_deliveries(survey_id, user_id, telegram_poll_id, sent_at) VALUES (?, ?, ?, ?)",
-            (survey_id, int(user_id), poll.poll.id, datetime.now(timezone.utc).isoformat()),
-        )
+    try:
+        with db.get_conn() as conn:
+            conn.execute(
+                "INSERT INTO survey_deliveries(survey_id, user_id, telegram_poll_id, sent_at) VALUES (?, ?, ?, ?)",
+                (survey_id, int(user_id), poll.poll.id, datetime.now(timezone.utc).isoformat()),
+            )
+    except Exception:
+        logging.exception("ثبت تحویل نظرسنجی %s ناموفق بود.", survey_id)
+        return "db_failed"
     return "sent"
 
 
+@router.poll_answer()
 async def save_poll_answer(answer: PollAnswer) -> None:
     if not answer.user:
         return

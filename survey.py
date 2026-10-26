@@ -6,13 +6,16 @@ from datetime import datetime, timezone
 
 from aiogram import F, Bot, Router
 from aiogram.filters import Command
-from aiogram.types import BufferedInputFile, CallbackQuery, Message, PollAnswer
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 import config
 import db
 from openpyxl import Workbook
 
 router = Router()
+
+DEFAULT_SURVEY_QUESTION = "میزان رضایت شما از خدمات شهری شهرداری ملایر چقدر است؟"
+DEFAULT_SURVEY_OPTIONS = ["عالی", "خوب", "متوسط", "ضعیف"]
 
 
 def _ensure_tables() -> None:
@@ -61,10 +64,26 @@ def _parse_survey(text: str) -> tuple[str, list[str]] | None:
 
 
 def _active_survey():
+    """برگرداندن نظرسنجی فعال؛ در نبود آن یک نظرسنجی پایه ایجاد می‌کند."""
     _ensure_tables()
     with db.get_conn() as conn:
-        return conn.execute(
+        survey = conn.execute(
             "SELECT * FROM surveys WHERE is_active = 1 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if survey is not None:
+            return survey
+
+        now = datetime.now(timezone.utc).isoformat()
+        cur = conn.execute(
+            "INSERT INTO surveys(question, options_json, created_at, is_active) VALUES (?, ?, ?, 1)",
+            (
+                DEFAULT_SURVEY_QUESTION,
+                json.dumps(DEFAULT_SURVEY_OPTIONS, ensure_ascii=False),
+                now,
+            ),
+        )
+        return conn.execute(
+            "SELECT * FROM surveys WHERE id = ?", (int(cur.lastrowid),)
         ).fetchone()
 
 
@@ -160,9 +179,6 @@ async def create_survey(message: Message, bot: Bot) -> None:
 @router.message(Command("survey_current"), F.chat.type == "private")
 async def current_survey(message: Message, bot: Bot) -> None:
     survey = _active_survey()
-    if survey is None:
-        await message.answer("📊 در حال حاضر نظرسنجی فعالی وجود ندارد.")
-        return
     ok, reason = await _send_survey_poll(bot, survey, message.from_user.id)
     if ok:
         await message.answer("📊 نظرسنجی فعال برای شما ارسال شد. ممنون که نظر می‌دهید. 🌹")
@@ -175,16 +191,13 @@ async def current_survey(message: Message, bot: Bot) -> None:
 @router.callback_query(F.data == "menu:survey")
 async def menu_survey(callback: CallbackQuery, bot: Bot) -> None:
     survey = _active_survey()
-    if survey is None:
-        await callback.answer("در حال حاضر نظرسنجی فعالی وجود ندارد.", show_alert=True)
-        return
     ok, reason = await _send_survey_poll(bot, survey, callback.from_user.id)
     if ok:
-        await callback.answer("نظرسنجی برای شما ارسال شد.")
+        await callback.answer("📊 نظرسنجی برای شما ارسال شد.")
     elif reason == "already_sent":
-        await callback.answer("شما قبلاً این نظرسنجی را دریافت کرده‌اید.", show_alert=True)
+        await callback.answer("✅ شما قبلاً این نظرسنجی را دریافت کرده‌اید.", show_alert=True)
     else:
-        await callback.answer("ارسال نظرسنجی ناموفق بود.", show_alert=True)
+        await callback.answer("ارسال نظرسنجی ناموفق بود. لطفاً دوباره تلاش کنید.", show_alert=True)
 
 
 @router.message(Command("survey_results"))
@@ -201,16 +214,8 @@ async def survey_results(message: Message) -> None:
             ).fetchone()
     else:
         survey = _active_survey()
-        if survey is None:
-            with db.get_conn() as conn:
-                survey = conn.execute(
-                    "SELECT * FROM surveys ORDER BY id DESC LIMIT 1"
-                ).fetchone()
     if survey is None:
-        await message.answer(
-            "📊 هنوز نظرسنجی‌ای ثبت نشده است.\n"
-            "برای دیدن نتایج یک نظرسنجی مشخص: /survey_results شناسه"
-        )
+        await message.answer("📊 هنوز نظرسنجی‌ای ثبت نشده است.")
         return
     options = json.loads(survey["options_json"])
     counts = [0] * len(options)
@@ -220,381 +225,19 @@ async def survey_results(message: Message) -> None:
             (int(survey["id"]),),
         ).fetchall()
     for row in rows:
-        for raw_index in str(row["option_ids"]).split(","):
-            if raw_index.strip().isdigit():
-                index = int(raw_index)
+        for value in str(row["option_ids"]).split(","):
+            if value.strip().isdigit():
+                index = int(value.strip())
                 if 0 <= index < len(counts):
                     counts[index] += 1
-    total = len(rows)
-    status = "🟢 فعال" if int(survey["is_active"]) else "⚪ بسته"
+    total = sum(counts)
     lines = [
-        f"📊 <b>نتایج نظرسنجی شماره {survey['id']}</b> — {status}",
-        "",
-        str(survey["question"]),
-        f"تعداد شهروندان پاسخ‌دهنده: {total}",
+        f"📊 <b>نتایج نظرسنجی {survey['id']}</b>",
+        f"سؤال: {survey['question']}",
+        f"تعداد پاسخ‌ها: {total}",
         "",
     ]
-    for i, option in enumerate(options):
-        percent = (counts[i] / total * 100) if total else 0
-        lines.append(f"{i + 1}. {option}: <b>{counts[i]}</b> رأی ({percent:.1f}٪)")
-    lines.extend(["", "برای نتایج نظرسنجی دیگر: /survey_results شناسه"])
+    for index, option in enumerate(options):
+        percent = (counts[index] / total * 100) if total else 0
+        lines.append(f"{option}: {counts[index]} رأی ({percent:.1f}٪)")
     await message.answer("\n".join(lines))
-
-
-@router.message(Command("survey_templates"))
-async def survey_templates(message: Message) -> None:
-    if message.chat.id != config.ADMIN_GROUP_ID:
-        return
-    await message.answer(
-        "🧩 <b>قالب‌های آماده نظرسنجی</b>\n\n"
-        "۱) رضایت از نظافت معابر\n"
-        "<code>/survey کیفیت نظافت معابر شهر ملایر را چگونه ارزیابی می‌کنید؟ | عالی | خوب | متوسط | ضعیف</code>\n\n"
-        "۲) اولویت خدمات شهری\n"
-        "<code>/survey کدام خدمت شهری باید در اولویت قرار گیرد؟ | جمع‌آوری پسماند | نگهداری فضای سبز | رفع آب‌گرفتگی | کنترل جانوران موذی</code>\n\n"
-        "۳) رضایت از رسیدگی به گزارش‌ها\n"
-        "<code>/survey میزان رضایت شما از رسیدگی به گزارش‌های شهروندی چقدر است؟ | کاملاً راضی | راضی | تاحدی راضی | ناراضی</code>"
-    )
-
-
-@router.message(Command("survey_stats"))
-async def survey_stats(message: Message) -> None:
-    if message.chat.id != config.ADMIN_GROUP_ID:
-        return
-    _ensure_tables()
-    with db.get_conn() as conn:
-        surveys = conn.execute(
-            "SELECT COUNT(*) AS total, COALESCE(SUM(is_active), 0) AS active FROM surveys"
-        ).fetchone()
-        answers = conn.execute(
-            "SELECT COUNT(*) AS total FROM survey_answers"
-        ).fetchone()["total"]
-        rows = conn.execute(
-            "SELECT s.id, s.question, s.is_active, "
-            "COUNT(DISTINCT d.user_id) AS delivered, "
-            "COUNT(DISTINCT a.user_id) AS answered "
-            "FROM surveys s "
-            "LEFT JOIN survey_deliveries d ON d.survey_id = s.id "
-            "LEFT JOIN survey_answers a ON a.survey_id = s.id "
-            "GROUP BY s.id ORDER BY s.id DESC LIMIT 10"
-        ).fetchall()
-    lines = [
-        "📈 <b>گزارش مدیریتی نظرسنجی‌ها</b>",
-        "",
-        f"تعداد کل نظرسنجی‌ها: <b>{surveys['total']}</b>",
-        f"تعداد نظرسنجی‌های فعال: <b>{surveys['active']}</b>",
-        f"کل پاسخ‌های ثبت‌شده: <b>{answers}</b>",
-        "",
-        "<b>آخرین نظرسنجی‌ها و میزان مشارکت</b>",
-    ]
-    if not rows:
-        lines.append("هنوز نظرسنجی‌ای ثبت نشده است.")
-    for row in rows:
-        question = str(row["question"]).replace("\\n", " ")
-        if len(question) > 55:
-            question = question[:52] + "..."
-        delivered = int(row["delivered"] or 0)
-        answered = int(row["answered"] or 0)
-        rate = answered / delivered * 100 if delivered else 0
-        status = "فعال" if int(row["is_active"]) else "بسته"
-        lines.append(
-            f"\\n#{row['id']} — {status}\\n{question}\\n"
-            f"ارسال‌شده: {delivered} | پاسخ‌دهنده: {answered} | مشارکت: {rate:.1f}٪"
-        )
-    await message.answer("\\n".join(lines))
-
-
-@router.message(Command("suggestions"))
-async def list_suggestions(message: Message) -> None:
-    if message.chat.id != config.ADMIN_GROUP_ID:
-        return
-    rows = db.get_all_suggestions(limit=30)
-    if not rows:
-        await message.answer("💡 هنوز پیشنهادی از شهروندان ثبت نشده است.")
-        return
-    lines = ["💡 <b>آخرین پیشنهادهای شهروندان</b>", ""]
-    for row in rows:
-        created = str(row["created_at"]).replace("T", " ")[:16]
-        user_name = str(row["user_name"] or "شهروند")
-        suggestion = str(row["text"]).replace("\\n", " ")
-        if len(suggestion) > 450:
-            suggestion = suggestion[:447] + "..."
-        lines.append(f"#{row['id']} | {created}\\nاز طرف: {user_name}\\n{suggestion}\\n")
-    await message.answer("\\n".join(lines))
-
-
-@router.message(Command("monthly_report"))
-async def export_monthly_management_report(message: Message) -> None:
-    """Create a monthly Excel report suitable for municipal management review."""
-    if message.chat.id != config.ADMIN_GROUP_ID:
-        return
-    _ensure_tables()
-    from datetime import datetime, timezone
-    raw = (message.text or "").split(maxsplit=1)
-    requested_month = raw[1].strip() if len(raw) > 1 else datetime.now(timezone.utc).strftime("%Y-%m")
-    if len(requested_month) != 7 or requested_month[4:5] != "-":
-        await message.answer(
-            "فرمت ماه درست نیست. ماه را به میلادی و به شکل YYYY-MM وارد کنید.\\n"
-            "مثال: /monthly_report 2026-10"
-        )
-        return
-    try:
-        datetime.strptime(requested_month, "%Y-%m")
-    except ValueError:
-        await message.answer("ماه واردشده معتبر نیست. نمونه درست: /monthly_report 2026-10")
-        return
-    with db.get_conn() as conn:
-        reports = conn.execute(
-            "SELECT id, user_name, category, description, latitude, longitude, status, feedback, created_at "
-            "FROM reports WHERE substr(created_at, 1, 7) = ? ORDER BY created_at, id",
-            (requested_month,),
-        ).fetchall()
-        surveys = conn.execute(
-            "SELECT id, question, created_at, is_active FROM surveys "
-            "WHERE substr(created_at, 1, 7) = ? ORDER BY created_at, id",
-            (requested_month,),
-        ).fetchall()
-        survey_ids = [int(row["id"]) for row in surveys]
-        survey_rows = []
-        for row in surveys:
-            delivered = conn.execute(
-                "SELECT COUNT(DISTINCT user_id) AS n FROM survey_deliveries WHERE survey_id = ?",
-                (int(row["id"]),),
-            ).fetchone()["n"]
-            answered = conn.execute(
-                "SELECT COUNT(DISTINCT user_id) AS n FROM survey_answers WHERE survey_id = ?",
-                (int(row["id"]),),
-            ).fetchone()["n"]
-            survey_rows.append((row, int(delivered or 0), int(answered or 0)))
-        suggestions = conn.execute(
-            "SELECT id, user_name, text, created_at FROM suggestions "
-            "WHERE substr(created_at, 1, 7) = ? ORDER BY created_at, id",
-            (requested_month,),
-        ).fetchall()
-        appreciations = conn.execute(
-            "SELECT id, user_name, text, created_at FROM appreciations "
-            "WHERE substr(created_at, 1, 7) = ? ORDER BY created_at, id",
-            (requested_month,),
-        ).fetchall()
-        subscriber_count = conn.execute(
-            "SELECT COUNT(*) AS n FROM subscribers"
-        ).fetchone()["n"]
-    workbook = Workbook()
-    overview = workbook.active
-    overview.title = "خلاصه مدیریتی"
-    overview.append(["گزارش ماهانه خدمات شهری و مشارکت شهروندان"])
-    overview.append(["ماه گزارش (میلادی)", requested_month])
-    overview.append(["تاریخ تهیه گزارش (UTC)", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")])
-    overview.append([])
-    overview.append(["شاخص", "مقدار"])
-    overview.append(["گزارش‌های ثبت‌شده شهروندان", len(reports)])
-    overview.append(["نظرسنجی‌های ایجادشده", len(surveys)])
-    overview.append(["پیشنهادهای ثبت‌شده", len(suggestions)])
-    overview.append(["پیام‌های قدردانی ثبت‌شده", len(appreciations)])
-    overview.append(["مشترکان فعلی اعلان‌ها (شاخص لحظه‌ای)", int(subscriber_count or 0)])
-    overview.append([])
-    overview.append(["وضعیت گزارش‌ها", "تعداد"])
-    status_counts = {}
-    for row in reports:
-        status = str(row["status"] or "نامشخص")
-        status_counts[status] = status_counts.get(status, 0) + 1
-    for status, count in sorted(status_counts.items()):
-        overview.append([status, count])
-    overview.append([])
-    overview.append(["دسته‌بندی گزارش‌ها", "تعداد"])
-    category_counts = {}
-    for row in reports:
-        category = str(row["category"] or "نامشخص")
-        category_counts[category] = category_counts.get(category, 0) + 1
-    for category, count in sorted(category_counts.items()):
-        overview.append([category, count])
-    overview.append([])
-    overview.append(["شاخص نظرسنجی", "مقدار"])
-    total_delivered = sum(item[1] for item in survey_rows)
-    total_answered = sum(item[2] for item in survey_rows)
-    overview.append(["مجموع ارسال‌های ثبت‌شده نظرسنجی‌های این ماه", total_delivered])
-    overview.append(["مجموع پاسخ‌های نظرسنجی‌های این ماه", total_answered])
-    overview.append(["نرخ مشارکت تجمیعی (%)", round(total_answered / total_delivered * 100, 1) if total_delivered else 0])
-    report_sheet = workbook.create_sheet("گزارش‌های شهروندی")
-    report_sheet.append(["شناسه", "نام ثبت‌شده", "دسته‌بندی", "شرح", "عرض جغرافیایی", "طول جغرافیایی", "وضعیت", "بازخورد شهروند", "زمان ثبت (UTC)"])
-    for row in reports:
-        report_sheet.append([row["id"], row["user_name"] or "", row["category"] or "", row["description"] or "", row["latitude"], row["longitude"], row["status"] or "", row["feedback"] or "", row["created_at"] or ""])
-    survey_sheet = workbook.create_sheet("نظرسنجی‌ها")
-    survey_sheet.append(["شناسه", "پرسش", "تاریخ ایجاد (UTC)", "وضعیت", "ارسال ثبت‌شده", "پاسخ‌دهنده", "مشارکت (%)"])
-    for row, delivered, answered in survey_rows:
-        survey_sheet.append([row["id"], row["question"], row["created_at"], "فعال" if int(row["is_active"]) else "بسته", delivered, answered, round(answered / delivered * 100, 1) if delivered else 0])
-    suggestion_sheet = workbook.create_sheet("پیشنهادها")
-    suggestion_sheet.append(["شناسه", "نام ثبت‌شده", "متن پیشنهاد", "زمان ثبت (UTC)"])
-    for row in suggestions:
-        suggestion_sheet.append([row["id"], row["user_name"] or "", row["text"], row["created_at"]])
-    appreciation_sheet = workbook.create_sheet("قدردانی‌ها")
-    appreciation_sheet.append(["شناسه", "نام ثبت‌شده", "متن قدردانی", "زمان ثبت (UTC)"])
-    for row in appreciations:
-        appreciation_sheet.append([row["id"], row["user_name"] or "", row["text"], row["created_at"]])
-    from openpyxl.styles import Font, PatternFill, Alignment
-    for sheet in workbook.worksheets:
-        sheet.freeze_panes = "A2"
-        sheet.auto_filter.ref = sheet.dimensions if sheet.max_row > 1 else "A1"
-        for cell in sheet[1]:
-            cell.font = Font(bold=True, color="FFFFFF", size=12)
-            cell.fill = PatternFill("solid", fgColor="176B5B")
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        sheet.row_dimensions[1].height = 30
-        for row in sheet.iter_rows():
-            for cell in row:
-                cell.alignment = Alignment(vertical="top", wrap_text=True)
-        for column in sheet.columns:
-            max_length = max((len(str(cell.value or "")) for cell in column), default=10)
-            sheet.column_dimensions[column[0].column_letter].width = min(max(max_length + 2, 12), 55)
-    output = BytesIO()
-    workbook.save(output)
-    await message.answer_document(
-        BufferedInputFile(output.getvalue(), filename=f"monthly_urban_services_{requested_month}.xlsx"),
-        caption=(
-            f"📊 گزارش ماهانه خدمات شهری برای {requested_month} آماده است.\\n"
-            "شامل خلاصه مدیریتی، گزارش‌ها، نظرسنجی‌ها، پیشنهادها و قدردانی‌هاست. "
-            "زمان‌ها بر اساس UTC و ماه بر اساس تقویم میلادی هستند."
-        ),
-    )
-
-
-@router.message(Command("survey_export"))
-async def export_survey_results(message: Message) -> None:
-    if message.chat.id != config.ADMIN_GROUP_ID:
-        return
-    _ensure_tables()
-    raw = (message.text or "").split(maxsplit=1)
-    survey_id = int(raw[1].strip()) if len(raw) > 1 and raw[1].strip().isdigit() else None
-    with db.get_conn() as conn:
-        if survey_id is None:
-            survey = conn.execute(
-                "SELECT * FROM surveys ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-        else:
-            survey = conn.execute(
-                "SELECT * FROM surveys WHERE id = ?", (survey_id,)
-            ).fetchone()
-        if survey is None:
-            await message.answer("برای خروجی، نظرسنجی‌ای پیدا نشد.")
-            return
-        options = json.loads(survey["options_json"])
-        answer_rows = conn.execute(
-            "SELECT user_id, option_ids, answered_at FROM survey_answers WHERE survey_id = ? ORDER BY answered_at",
-            (int(survey["id"]),),
-        ).fetchall()
-        delivery_count = conn.execute(
-            "SELECT COUNT(*) AS n FROM survey_deliveries WHERE survey_id = ?",
-            (int(survey["id"]),),
-        ).fetchone()["n"]
-    workbook = Workbook()
-    summary = workbook.active
-    summary.title = "خلاصه"
-    summary.append(["شناسه نظرسنجی", int(survey["id"])])
-    summary.append(["پرسش", str(survey["question"])])
-    summary.append(["وضعیت", "فعال" if int(survey["is_active"]) else "بسته"])
-    summary.append(["تعداد ارسال ثبت‌شده", int(delivery_count)])
-    summary.append(["تعداد پاسخ‌دهندگان", len(answer_rows)])
-    summary.append(["درصد مشارکت", round(len(answer_rows) / delivery_count * 100, 1) if delivery_count else 0])
-    summary.append([])
-    summary.append(["گزینه", "تعداد رأی", "درصد از پاسخ‌ها"])
-    counts = [0] * len(options)
-    for row in answer_rows:
-        for raw_index in str(row["option_ids"]).split(","):
-            if raw_index.strip().isdigit():
-                idx = int(raw_index)
-                if 0 <= idx < len(counts):
-                    counts[idx] += 1
-    total_votes = sum(counts)
-    for idx, option in enumerate(options):
-        summary.append([option, counts[idx], round(counts[idx] / total_votes * 100, 1) if total_votes else 0])
-    details = workbook.create_sheet("پاسخ‌ها")
-    details.append(["شناسه شهروند", "شناسه گزینه انتخابی", "زمان پاسخ"])
-    for row in answer_rows:
-        details.append([int(row["user_id"]), str(row["option_ids"]), str(row["answered_at"])])
-    for sheet in workbook.worksheets:
-        sheet.freeze_panes = "A2"
-        for column in sheet.columns:
-            max_length = max((len(str(cell.value or "")) for cell in column), default=10)
-            sheet.column_dimensions[column[0].column_letter].width = min(max(max_length + 2, 12), 55)
-    output = BytesIO()
-    workbook.save(output)
-    filename = f"survey_{int(survey['id'])}_results.xlsx"
-    await message.answer_document(
-        BufferedInputFile(output.getvalue(), filename=filename),
-        caption=f"📊 خروجی اکسل نظرسنجی شماره {survey['id']}",
-    )
-
-
-@router.message(Command("survey_history"))
-async def survey_history(message: Message) -> None:
-    if message.chat.id != config.ADMIN_GROUP_ID:
-        return
-    _ensure_tables()
-    with db.get_conn() as conn:
-        rows = conn.execute(
-            "SELECT id, question, created_at, is_active FROM surveys ORDER BY id DESC LIMIT 10"
-        ).fetchall()
-    if not rows:
-        await message.answer("📊 هنوز هیچ نظرسنجی‌ای ثبت نشده است.")
-        return
-    lines = ["📚 <b>۱۰ نظرسنجی اخیر</b>", ""]
-    for row in rows:
-        status = "🟢 فعال" if int(row["is_active"]) else "⚪ بسته"
-        question = str(row["question"]).replace("\n", " ")
-        if len(question) > 55:
-            question = question[:52] + "..."
-        lines.append(f"#{row['id']} | {status}\n{question}\n")
-    await message.answer("\n".join(lines))
-
-
-@router.message(Command("survey_close"))
-async def close_survey(message: Message) -> None:
-    if message.chat.id != config.ADMIN_GROUP_ID:
-        return
-    _ensure_tables()
-    raw = (message.text or "").split(maxsplit=1)
-    with db.get_conn() as conn:
-        if len(raw) > 1 and raw[1].strip().isdigit():
-            cur = conn.execute(
-                "UPDATE surveys SET is_active = 0 WHERE id = ? AND is_active = 1",
-                (int(raw[1].strip()),),
-            )
-        else:
-            cur = conn.execute("UPDATE surveys SET is_active = 0 WHERE is_active = 1")
-    if cur.rowcount:
-        await message.answer(
-            "🛑 نظرسنجی بسته شد. نتایج آن با دستور /survey_results قابل مشاهده است."
-        )
-    else:
-        await message.answer(
-            "نظرسنجی فعالی برای بستن پیدا نشد. برای بستن یک نظرسنجی مشخص: /survey_close شناسه"
-        )
-
-
-@router.poll_answer()
-async def save_poll_answer(answer: PollAnswer) -> None:
-    try:
-        _ensure_tables()
-        with db.get_conn() as conn:
-            delivery = conn.execute(
-                "SELECT survey_id, user_id FROM survey_deliveries WHERE telegram_poll_id = ?",
-                (answer.poll_id,),
-            ).fetchone()
-            if delivery is None:
-                return
-            conn.execute(
-                """
-                INSERT INTO survey_answers(survey_id, user_id, option_ids, answered_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(survey_id, user_id) DO UPDATE SET
-                    option_ids = excluded.option_ids,
-                    answered_at = excluded.answered_at
-                """,
-                (
-                    int(delivery["survey_id"]),
-                    int(answer.user.id),
-                    ",".join(str(x) for x in answer.option_ids),
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
-    except Exception:
-        logging.exception("ثبت رأی نظرسنجی %s ناموفق بود.", answer.poll_id)

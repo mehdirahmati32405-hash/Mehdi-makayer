@@ -186,7 +186,7 @@ async def main() -> None:
     await set_commands(bot)
     dispatcher = Dispatcher(storage=MemoryStorage())
     # Bridge citizen reports and status updates with the municipal Supabase panel.
-    dispatcher.update.outer_middleware(PanelSyncMiddleware())
+    dispatcher.callback_query.outer_middleware(PanelSyncMiddleware())
     dispatcher.callback_query.outer_middleware(ConfirmationDedupMiddleware(ttl_seconds=180))
     dispatcher.callback_query.outer_middleware(CallbackSecurityMiddleware())
     dispatcher.include_router(citizen_identity.router)

@@ -25,6 +25,8 @@ from gis_boundary_admin import gis_admin_router
 from location_db_upgrade import init_location_db
 from seasonal_content import SEASON_BY_MONTH, SEASON_TEXTS
 from delivery_retry import retry_pending_admin_reports
+from panel_sync_middleware import PanelSyncMiddleware
+from panel_status_loop import panel_status_loop
 
 REMINDER_CHECK_INTERVAL_SECONDS = 60 * 60
 REMINDER_STALE_HOURS = 48
@@ -183,6 +185,8 @@ async def main() -> None:
     bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     await set_commands(bot)
     dispatcher = Dispatcher(storage=MemoryStorage())
+    # Bridge citizen reports and status updates with the municipal Supabase panel.
+    dispatcher.update.outer_middleware(PanelSyncMiddleware())
     dispatcher.callback_query.outer_middleware(ConfirmationDedupMiddleware(ttl_seconds=180))
     dispatcher.callback_query.outer_middleware(CallbackSecurityMiddleware())
     dispatcher.include_router(citizen_identity.router)
@@ -196,6 +200,7 @@ async def main() -> None:
     dispatcher.include_router(gis_admin_router)
     asyncio.create_task(reminder_loop(bot))
     asyncio.create_task(delivery_retry_loop(bot))
+    asyncio.create_task(panel_status_loop(bot))
     asyncio.create_task(weekly_summary_loop(bot))
     asyncio.create_task(seasonal_reminder_loop(bot))
     logging.info("ربات در حال اجراست...")

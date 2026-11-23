@@ -241,3 +241,148 @@ async def survey_results(message: Message) -> None:
         percent = (counts[index] / total * 100) if total else 0
         lines.append(f"{option}: {counts[index]} رأی ({percent:.1f}٪)")
     await message.answer("\n".join(lines))
+
+
+def _workbook_bytes(workbook: Workbook) -> bytes:
+    """Serialize an Excel workbook to bytes for Telegram document delivery."""
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def _style_sheet(sheet) -> None:
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    sheet.sheet_view.rightToLeft = True
+    sheet.freeze_panes = "A2"
+    for cell in sheet[1]:
+        cell.font = Font(name="Arial", bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1F4E5F")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for column in sheet.columns:
+        values = [len(str(cell.value or "")) for cell in column]
+        width = min(max(max(values, default=10) + 2, 12), 42)
+        sheet.column_dimensions[get_column_letter(column[0].column)].width = width
+
+
+def export_survey_results(survey_id: int | None = None) -> bytes:
+    """Create an Excel file containing the selected survey's option counts."""
+    _ensure_tables()
+    with db.get_conn() as conn:
+        if survey_id is None:
+            survey = conn.execute(
+                "SELECT * FROM surveys ORDER BY is_active DESC, id DESC LIMIT 1"
+            ).fetchone()
+        else:
+            survey = conn.execute(
+                "SELECT * FROM surveys WHERE id = ?", (int(survey_id),)
+            ).fetchone()
+        if survey is None:
+            raise ValueError("نظرسنجی‌ای برای تهیه خروجی وجود ندارد.")
+        answers = conn.execute(
+            "SELECT option_ids FROM survey_answers WHERE survey_id = ?",
+            (int(survey["id"]),),
+        ).fetchall()
+
+    options = json.loads(survey["options_json"])
+    counts = [0] * len(options)
+    for answer in answers:
+        for raw_index in str(answer["option_ids"] or "").split(","):
+            raw_index = raw_index.strip()
+            if raw_index.isdigit():
+                index = int(raw_index)
+                if 0 <= index < len(counts):
+                    counts[index] += 1
+
+    total = sum(counts)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "نتایج نظرسنجی"
+    sheet.append(["شناسه نظرسنجی", int(survey["id"])])
+    sheet.append(["سؤال", str(survey["question"])])
+    sheet.append([])
+    sheet.append(["گزینه", "تعداد رأی", "درصد"])
+    for option, count in zip(options, counts):
+        sheet.append([str(option), count, round(count / total * 100, 1) if total else 0])
+    _style_sheet(sheet)
+    return _workbook_bytes(workbook)
+
+
+def export_monthly_management_report(year: int | None = None, month: int | None = None) -> bytes:
+    """Build a five-sheet monthly management workbook from local database records.
+
+    When year/month are omitted, the current UTC month is used. The function
+    returns XLSX bytes so callers can send it as a Telegram document.
+    """
+    now = datetime.now(timezone.utc)
+    year = int(year if year is not None else now.year)
+    month = int(month if month is not None else now.month)
+    if not 1 <= month <= 12:
+        raise ValueError("ماه باید بین ۱ تا ۱۲ باشد.")
+    period = f"{year:04d}-{month:02d}"
+    _ensure_tables()
+
+    with db.get_conn() as conn:
+        reports = conn.execute(
+            "SELECT id, user_name, category, description, status, created_at, latitude, longitude "
+            "FROM reports WHERE created_at LIKE ? ORDER BY id",
+            (period + "%",),
+        ).fetchall()
+        surveys = conn.execute(
+            "SELECT id, question, is_active, created_at FROM surveys "
+            "WHERE created_at LIKE ? ORDER BY id",
+            (period + "%",),
+        ).fetchall()
+        suggestions = conn.execute(
+            "SELECT user_name, text, created_at FROM suggestions "
+            "WHERE created_at LIKE ? ORDER BY id",
+            (period + "%",),
+        ).fetchall()
+        appreciations = conn.execute(
+            "SELECT user_name, text, created_at FROM appreciations "
+            "WHERE created_at LIKE ? ORDER BY id",
+            (period + "%",),
+        ).fetchall()
+        survey_answer_rows = conn.execute(
+            "SELECT s.id, s.question, a.option_ids FROM surveys s "
+            "LEFT JOIN survey_answers a ON a.survey_id = s.id "
+            "WHERE s.created_at LIKE ? ORDER BY s.id",
+            (period + "%",),
+        ).fetchall()
+
+    workbook = Workbook()
+    summary = workbook.active
+    summary.title = "خلاصه مدیریتی"
+    summary.append(["عنوان شاخص", "مقدار"])
+    summary.append(["دوره گزارش", period])
+    summary.append(["تعداد گزارش‌های شهروندی", len(reports)])
+    summary.append(["تعداد نظرسنجی‌های ایجادشده", len(surveys)])
+    summary.append(["تعداد پاسخ‌های نظرسنجی", sum(1 for row in survey_answer_rows if row["option_ids"] is not None)])
+    summary.append(["تعداد پیشنهادهای ثبت‌شده", len(suggestions)])
+    summary.append(["تعداد پیام‌های قدردانی", len(appreciations)])
+
+    report_sheet = workbook.create_sheet("گزارش‌های شهروندی")
+    report_sheet.append(["شناسه", "نام شهروند", "دسته‌بندی", "شرح", "وضعیت", "تاریخ ثبت", "عرض جغرافیایی", "طول جغرافیایی"])
+    for row in reports:
+        report_sheet.append([row["id"], row["user_name"], row["category"], row["description"],
+                             row["status"], row["created_at"], row["latitude"], row["longitude"]])
+
+    survey_sheet = workbook.create_sheet("نظرسنجی‌ها")
+    survey_sheet.append(["شناسه", "پرسش", "فعال", "تاریخ ایجاد"])
+    for row in surveys:
+        survey_sheet.append([row["id"], row["question"], "بله" if row["is_active"] else "خیر", row["created_at"]])
+
+    suggestion_sheet = workbook.create_sheet("پیشنهادها")
+    suggestion_sheet.append(["نام شهروند", "متن پیشنهاد", "تاریخ ثبت"])
+    for row in suggestions:
+        suggestion_sheet.append([row["user_name"], row["text"], row["created_at"]])
+
+    appreciation_sheet = workbook.create_sheet("قدردانی‌ها")
+    appreciation_sheet.append(["نام شهروند", "متن قدردانی", "تاریخ ثبت"])
+    for row in appreciations:
+        appreciation_sheet.append([row["user_name"], row["text"], row["created_at"]])
+
+    for sheet in workbook.worksheets:
+        _style_sheet(sheet)
+    return _workbook_bytes(workbook)

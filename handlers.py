@@ -17,6 +17,7 @@ from aiogram.types import (
 )
 
 import ai_assistant
+from citizen_knowledge import retrieve_knowledge
 import config
 import db
 import export
@@ -315,7 +316,12 @@ async def process_ai_question(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     history = data.get("ai_history", [])
     thinking_msg = await message.answer("در حال بررسی سؤال شما... ⏳")
-    system_prompt = ai_assistant.build_system_prompt(DUTIES_TEXT, list(CATEGORIES.values()))
+    knowledge_text = retrieve_knowledge(question)
+    system_prompt = ai_assistant.build_system_prompt(
+        DUTIES_TEXT,
+        list(CATEGORIES.values()),
+        knowledge_text=knowledge_text,
+    )
     answer = await ai_assistant.ask_ai(
         question,
         config.OPENAI_API_KEY,

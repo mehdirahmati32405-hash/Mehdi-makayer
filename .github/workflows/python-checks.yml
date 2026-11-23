@@ -22,4 +22,4 @@ jobs:
       - name: Compile Python modules
         run: python -m compileall -q .
       - name: Run test suite
-        run: pytest -q
+        run: PYTHONPATH=. python -m pytest -q

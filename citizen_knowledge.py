@@ -58,9 +58,6 @@ DOCUMENTS = [
         DUTIES_TEXT,
         "شرح وظایف درج‌شده در پروژه",
     ),
-]
-
-
     KnowledgeDocument(
         "construction_permits", "مجوزها و مقررات ساخت‌وساز",
         ("پروانه ساخت", "مجوز ساخت", "ساخت و ساز", "تراکم", "پایان کار", "تخلف ساختمانی", "عقب نشینی", "کاربری ملک"),
@@ -79,6 +76,7 @@ DOCUMENTS = [
         "فهرست تأییدشده نشانی و مختصات مراکز خدمات شهری ملایر هنوز در بانک دانش ثبت نشده است. از ساختن نشانی یا مختصات خودداری کن. در صورت نیاز، از شهروند نام خدمت یا محله را بپرس و توضیح بده که برای اعلام موقعیت دقیق باید فهرست رسمی مراکز به بانک دانش افزوده شود.",
         "یادداشت محدودیت اطلاعات؛ نیازمند فهرست رسمی مراکز و مختصات",
     ),
+]
 
 
 def _normalize(value: str) -> str:
@@ -96,11 +94,10 @@ def retrieve_knowledge(question: str, limit: int = 3) -> str:
         return ""
 
     scored = []
+    query_tokens = set(query.split())
     for document in DOCUMENTS:
         keywords = [_normalize(word) for word in document.keywords]
         score = sum(2 if keyword in query else 0 for keyword in keywords if keyword)
-        # Token overlap helps with natural phrasing and inflections.
-        query_tokens = set(query.split())
         keyword_tokens = set(" ".join(keywords).split())
         score += len(query_tokens & keyword_tokens)
         if score:

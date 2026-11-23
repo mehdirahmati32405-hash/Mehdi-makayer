@@ -272,26 +272,69 @@ async def process_suggestion(message: Message, state: FSMContext, bot: Bot) -> N
 async def suggestion_invalid(message: Message) -> None:
     await message.answer("لطفاً پیشنهادتون رو به‌صورت متن بنویسید.")
 
+AI_HELP_TEXT = (
+    "🤖 <b>دستیار هوشمند شهروندی ملایر</b>\n\n"
+    "سؤالتون رو به زبان ساده بنویسید. می‌تونید درباره این موضوع‌ها بپرسید:\n"
+    "♻️ تفکیک زباله و مدیریت پسماند\n"
+    "🏗 قوانین و مراحل ساخت‌وساز و مجوزها\n"
+    "💳 عوارض و راهنمای دریافت خدمات شهرداری\n"
+    "📍 راهنمای پیدا کردن خدمات و ثبت موقعیت\n"
+    "🌳 نظافت، فضای سبز، کنترل موش و مشکلات شهری\n\n"
+    "همچنین می‌تونید سؤال عمومی یا آموزشی بپرسید. "
+    "برای ادامه گفت‌وگو، سؤال بعدی رو همین‌جا بفرستید. "
+    "برای پایان گفت‌وگو /cancel رو بزنید.\n\n"
+    "<i>توجه: اطلاعات متغیر مثل مبلغ عوارض، مهلت‌ها و مقررات جاری باید از مرجع رسمی شهرداری تأیید بشه.</i>"
+)
+
 @router.message(Command("ask"), F.chat.type == "private")
 async def cmd_ask(message: Message, state: FSMContext) -> None:
-    await state.clear(); await state.set_state(AskAIForm.waiting_question)
-    await message.answer("🤖 سؤالتون رو درباره خدمات شهری یا نحوه کار ربات بپرسید.")
+    await state.clear()
+    await state.set_state(AskAIForm.waiting_question)
+    await state.update_data(ai_history=[])
+    await message.answer(AI_HELP_TEXT)
 
 @router.callback_query(F.data == "menu:ask_ai")
 async def menu_ask_ai(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.clear(); await state.set_state(AskAIForm.waiting_question)
-    if callback.message is not None: await callback.message.answer("🤖 سؤالتون رو درباره خدمات شهری یا نحوه کار ربات بپرسید.")
+    await state.clear()
+    await state.set_state(AskAIForm.waiting_question)
+    await state.update_data(ai_history=[])
+    if callback.message is not None:
+        await callback.message.answer(AI_HELP_TEXT)
     await callback.answer()
 
 @router.message(AskAIForm.waiting_question, F.chat.type == "private", F.text, ~F.text.startswith("/"))
 async def process_ai_question(message: Message, state: FSMContext) -> None:
-    question = message.text.strip()
-    if not question: await message.answer("لطفاً یک سؤال بنویسید."); return
-    thinking_msg = await message.answer("در حال بررسی... ⏳")
+    question = (message.text or "").strip()
+    if not question:
+        await message.answer("لطفاً یک سؤال بنویسید.")
+        return
+    if len(question) > 1500:
+        await message.answer("لطفاً سؤال رو کوتاه‌تر و در حداکثر ۱۵۰۰ نویسه بفرستید.")
+        return
+
+    data = await state.get_data()
+    history = data.get("ai_history", [])
+    thinking_msg = await message.answer("در حال بررسی سؤال شما... ⏳")
     system_prompt = ai_assistant.build_system_prompt(DUTIES_TEXT, list(CATEGORIES.values()))
-    answer = await ai_assistant.ask_ai(question, config.DEEPSEEK_API_KEY, system_prompt)
+    answer = await ai_assistant.ask_ai(
+        question,
+        config.OPENAI_API_KEY,
+        system_prompt,
+        history=history,
+    )
+
+    # Keep a short, user-specific conversation context for follow-up questions.
+    if answer and answer != ai_assistant.ERROR_MESSAGE and answer != ai_assistant.NOT_CONFIGURED_MESSAGE:
+        history.extend([
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": answer},
+        ])
+        await state.update_data(ai_history=history[-8:])
+
+    # Telegram text messages have a 4096-character limit.
+    if len(answer) > 3900:
+        answer = answer[:3850].rsplit("\n", 1)[0] + "\n\nادامه پاسخ طولانی بود؛ لطفاً درباره بخش موردنظرتون سؤال تکمیلی بپرسید."
     await thinking_msg.edit_text(answer)
-    await state.clear()
 
 @router.message(AskAIForm.waiting_question, F.chat.type == "private", ~F.text.startswith("/"))
 async def ai_question_invalid(message: Message) -> None:

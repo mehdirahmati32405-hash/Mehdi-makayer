@@ -16,10 +16,30 @@ class CallbackSecurityMiddleware(BaseMiddleware):
 
         callback_data = event.data or ""
 
-        # Status buttons are management actions and must only work in the admin group.
+        # Status changes require both the configured admin group and an actual
+        # Telegram group administrator/creator. Group membership alone is not enough.
         if callback_data.startswith("status:"):
             if event.message is None or event.message.chat.id != config.ADMIN_GROUP_ID:
                 await event.answer("این عملیات فقط برای مدیران مجاز است.", show_alert=True)
+                return None
+            try:
+                member = await event.bot.get_chat_member(
+                    chat_id=config.ADMIN_GROUP_ID,
+                    user_id=event.from_user.id,
+                )
+            except Exception:
+                # Fail closed if Telegram cannot verify the caller's role.
+                await event.answer(
+                    "امکان تأیید سطح دسترسی شما وجود ندارد. لطفاً دوباره تلاش کنید.",
+                    show_alert=True,
+                )
+                return None
+
+            if member.status not in {"administrator", "creator"}:
+                await event.answer(
+                    "فقط مدیران گروه اجازه تغییر وضعیت گزارش را دارند.",
+                    show_alert=True,
+                )
                 return None
 
         # Feedback/reopen buttons belong to the report owner.

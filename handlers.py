@@ -1,7 +1,9 @@
 from datetime import datetime
+import logging
 from pathlib import Path
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -341,19 +343,25 @@ async def process_ai_question(message: Message, state: FSMContext) -> None:
 
     data = await state.get_data()
     history = data.get("ai_history", [])
+    if not isinstance(history, list):
+        history = []
     thinking_msg = await message.answer("در حال بررسی سؤال شما... ⏳")
-    knowledge_text = retrieve_knowledge(question)
-    system_prompt = ai_assistant.build_system_prompt(
-        DUTIES_TEXT,
-        list(CATEGORIES.values()),
-        knowledge_text=knowledge_text,
-    )
-    answer = await ai_assistant.ask_ai(
-        question,
-        config.OPENAI_API_KEY,
-        system_prompt,
-        history=history,
-    )
+    try:
+        knowledge_text = retrieve_knowledge(question)
+        system_prompt = ai_assistant.build_system_prompt(
+            DUTIES_TEXT,
+            list(CATEGORIES.values()),
+            knowledge_text=knowledge_text,
+        )
+        answer = await ai_assistant.ask_ai(
+            question,
+            config.OPENAI_API_KEY,
+            system_prompt,
+            history=history,
+        )
+    except Exception:
+        logging.exception("خطا در آماده‌سازی یا اجرای دستیار هوشمند شهروندی.")
+        answer = ai_assistant.ERROR_MESSAGE
 
     # Keep a short, user-specific conversation context for follow-up questions.
     if answer and answer != ai_assistant.ERROR_MESSAGE and answer != ai_assistant.NOT_CONFIGURED_MESSAGE:
@@ -366,7 +374,15 @@ async def process_ai_question(message: Message, state: FSMContext) -> None:
     # Telegram text messages have a 4096-character limit.
     if len(answer) > 3900:
         answer = answer[:3850].rsplit("\n", 1)[0] + "\n\nادامه پاسخ طولانی بود؛ لطفاً درباره بخش موردنظرتون سؤال تکمیلی بپرسید."
-    await thinking_msg.edit_text(answer)
+    try:
+        await thinking_msg.edit_text(answer)
+    except Exception as exc:
+        if "message is not modified" not in str(exc).lower():
+            logging.exception("ارسال پاسخ دستیار هوشمند در تلگرام ناموفق بود.")
+            try:
+                await message.answer(ai_assistant.ERROR_MESSAGE)
+            except Exception:
+                logging.exception("ارسال پیام جایگزین برای خطای دستیار هوشمند نیز ناموفق بود.")
 
 @router.message(AskAIForm.waiting_question, F.chat.type == "private", ~F.text.startswith("/"))
 async def ai_question_invalid(message: Message) -> None:
@@ -612,11 +628,22 @@ async def admin_update_status(callback: CallbackQuery, bot: Bot) -> None:
     if new_status is None: await callback.answer("وضعیت نامعتبر است.", show_alert=True); return
     report = db.get_report(report_id)
     if report is None: await callback.answer("این گزارش پیدا نشد.", show_alert=True); return
+    # Repeated taps on the same status must be harmless and must not trigger
+    # Telegram's "message is not modified" error or duplicate citizen notices.
+    if report["status"] == new_status:
+        await callback.answer("این گزارش از قبل در همین وضعیت قرار دارد. ✅")
+        return
+
     db.update_status(report_id, new_status)
     if callback.message is not None:
         code = db.report_code(report_id); from_line = "شهروند ناشناس 🕵️" if report["is_anonymous"] else report["user_name"]
         new_caption = (f"🆘 مورد نیازمند ارجاع به کمک اجتماعی — {code}\n\nتوضیحات: {report['description']}\nاز طرف: {from_line}\nوضعیت: {new_status}\n\nلطفاً برای پیگیری با نهاد حمایتی/بهزیستی هماهنگ شود." if report["category"] == CATEGORIES.get("social_help") else f"🆕 گزارش جدید شهروندی — {code}\n\nدسته‌بندی: {report['category']}\nتوضیحات: {report['description']}\nاز طرف: {from_line}\nوضعیت: {new_status}")
-        await callback.message.edit_text(new_caption, reply_markup=admin_status_keyboard(report_id))
+        try:
+            await callback.message.edit_text(new_caption, reply_markup=admin_status_keyboard(report_id))
+        except TelegramBadRequest as exc:
+            # The database may already match the rendered Telegram message.
+            if "message is not modified" not in str(exc).lower():
+                raise
     try:
         await bot.send_message(chat_id=report["user_id"], text=f"🔔 وضعیت گزارش شما (کد {db.report_code(report_id)}) به‌روزرسانی شد:\nوضعیت جدید: {new_status}")
         if new_status == db.STATUS_DONE: await bot.send_message(chat_id=report["user_id"], text="آیا مشکل واقعاً برطرف شده؟ نظر شما به بهبود کیفیت خدمات کمک می‌کند 🙏", reply_markup=feedback_keyboard(report_id))

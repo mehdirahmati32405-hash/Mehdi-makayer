@@ -11,13 +11,13 @@ Zone -> Location Point -> Citizen Report -> Field Operation
 
 import json
 import math
-import os
 import sqlite3
+import db
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 
-DB_PATH = os.getenv("DB_PATH", "reports.db")
+DB_PATH = db.DB_PATH
 
 ZONE_CODES = {
     "M1": "شمال‌غرب",

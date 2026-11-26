@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
@@ -6,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     BufferedInputFile,
+    FSInputFile,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -77,6 +79,7 @@ def feedback_keyboard(report_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👍 بله، برطرف شده", callback_data=f"feedback:{report_id}:yes"), InlineKeyboardButton(text="👎 خیر، هنوز هست", callback_data=f"feedback:{report_id}:no")]])
 
 WEBSITE_URL = "https://mehditorkashvand1365.github.io/MalayerKhadanatShahri/"
+INSTAGRAM_URL = "https://www.instagram.com/khadamatshahrimalayer"
 
 def services_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -84,6 +87,7 @@ def services_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📰 فعالیت‌ها و پروژه‌های اخیر", callback_data="info:activities")],
         [InlineKeyboardButton(text="📋 شرح وظایف معاونت خدمات شهری", callback_data="info:duties")],
         [InlineKeyboardButton(text="🌐 مشاهده وب‌سایت خدمات شهری", url=WEBSITE_URL)],
+        [InlineKeyboardButton(text="📷 اینستاگرام معاونت خدمات شهری", callback_data="menu:instagram")],
     ])
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -99,6 +103,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔔 اطلاعیه‌های مهم", callback_data="menu:subscribe")],
         [InlineKeyboardButton(text="🤖 پرسش هوشمند", callback_data="menu:ask_ai")],
         [InlineKeyboardButton(text="🌐 وب‌سایت خدمات شهری", url=WEBSITE_URL)],
+        [InlineKeyboardButton(text="📷 اینستاگرام معاونت خدمات شهری", callback_data="menu:instagram")],
         [InlineKeyboardButton(text="📊 آمار کلی گزارش‌ها", callback_data="menu:stats")],
     ])
 
@@ -222,6 +227,26 @@ async def cmd_hotspots(message: Message, bot: Bot) -> None:
     await message.answer("\n".join(lines))
     for c in clusters:
         await bot.send_location(chat_id=message.chat.id, latitude=c["latitude"], longitude=c["longitude"])
+
+@router.callback_query(F.data == "menu:instagram")
+async def menu_instagram(callback: CallbackQuery) -> None:
+    if callback.message is not None:
+        photo_path = Path(__file__).resolve().parent / "instagram_services_qr.png"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📷 ورود به صفحه اینستاگرام", url=INSTAGRAM_URL)]
+        ])
+        await callback.message.answer_photo(
+            photo=FSInputFile(photo_path),
+            caption=(
+                "📷 <b>صفحه رسمی اینستاگرام معاونت خدمات شهری شهرداری ملایر</b>\n\n"
+                "برای مشاهده اطلاعیه‌ها، فعالیت‌ها و اخبار خدمات شهری، QR کد را اسکن کنید "
+                "یا از دکمه زیر وارد صفحه شوید.\n\n"
+                "@khadamatshahrimalayer"
+            ),
+            reply_markup=keyboard,
+        )
+    await callback.answer()
+
 
 @router.callback_query(F.data == "menu:new_report")
 async def menu_new_report(callback: CallbackQuery, state: FSMContext) -> None:

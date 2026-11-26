@@ -104,6 +104,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🤖 پرسش هوشمند", callback_data="menu:ask_ai")],
         [InlineKeyboardButton(text="🌐 وب‌سایت خدمات شهری", url=WEBSITE_URL)],
         [InlineKeyboardButton(text="📷 اینستاگرام معاونت خدمات شهری", callback_data="menu:instagram")],
+        [InlineKeyboardButton(text="♻️ عضویت در پویش نه به پلاستیک", url="https://rubika.ir/nabepelastik")],
         [InlineKeyboardButton(text="📊 آمار کلی گزارش‌ها", callback_data="menu:stats")],
     ])
 

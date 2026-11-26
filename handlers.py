@@ -376,10 +376,13 @@ async def process_ai_question(message: Message, state: FSMContext) -> None:
         answer = answer[:3850].rsplit("\n", 1)[0] + "\n\nادامه پاسخ طولانی بود؛ لطفاً درباره بخش موردنظرتون سؤال تکمیلی بپرسید."
     try:
         await thinking_msg.edit_text(answer)
-    except TelegramBadRequest as exc:
+    except Exception as exc:
         if "message is not modified" not in str(exc).lower():
             logging.exception("ارسال پاسخ دستیار هوشمند در تلگرام ناموفق بود.")
-            await message.answer(ai_assistant.ERROR_MESSAGE)
+            try:
+                await message.answer(ai_assistant.ERROR_MESSAGE)
+            except Exception:
+                logging.exception("ارسال پیام جایگزین برای خطای دستیار هوشمند نیز ناموفق بود.")
 
 @router.message(AskAIForm.waiting_question, F.chat.type == "private", ~F.text.startswith("/"))
 async def ai_question_invalid(message: Message) -> None:

@@ -19,14 +19,15 @@ _db_dir = os.path.dirname(DB_PATH)
 if _db_dir:
     os.makedirs(_db_dir, exist_ok=True)
 
-# مهاجرت یک‌باره و بدون حذف فایل قدیمی: اگر دیتابیس قدیمی کنار کد باشد و
-# نسخه‌ای در /data وجود نداشته باشد، یک کپی از آن ساخته می‌شود.
+# مهاجرت یک‌باره و بدون حذف فایل قدیمی: فایل قدیمی را نسبت به محل همین
+# ماژول پیدا می‌کنیم، نه working directory که ممکن است در هاست متفاوت باشد.
+_legacy_db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports.db")
 if (
     DB_PATH == "/data/reports.db"
     and not os.path.exists(DB_PATH)
-    and os.path.isfile("reports.db")
+    and os.path.isfile(_legacy_db_path)
 ):
-    shutil.copy2("reports.db", DB_PATH)
+    shutil.copy2(_legacy_db_path, DB_PATH)
 
 STATUS_RECEIVED = "دریافت شد"
 STATUS_IN_PROGRESS = "در حال رسیدگی"

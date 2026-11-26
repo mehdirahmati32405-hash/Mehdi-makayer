@@ -1,19 +1,33 @@
 import json
 import os
 import sqlite3
+import shutil
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-# مسیر فایل پایگاه‌داده — اگر متغیر محیطی DB_PATH تنظیم شده باشد (مثلاً روی یک
-# Volume دائمی در Railway)، از همان استفاده می‌شود؛ در غیر این صورت، همان مسیر
-# قبلی (کنار خود کد) به‌عنوان پیش‌فرض به کار می‌رود.
-DB_PATH = os.getenv("DB_PATH", "reports.db")
+# در FadeHost فضای /data پایدار است. در محیط‌های توسعه که این مسیر وجود
+# ندارد، رفتار قدیمی (reports.db کنار کد) حفظ می‌شود. مقدار صریح DB_PATH همیشه اولویت دارد.
+_configured_db_path = os.getenv("DB_PATH")
+if _configured_db_path:
+    DB_PATH = _configured_db_path
+elif os.path.isdir("/data"):
+    DB_PATH = "/data/reports.db"
+else:
+    DB_PATH = "reports.db"
 
-# اگر مسیر شامل یک پوشه باشد (مثل /data/reports.db) و آن پوشه هنوز وجود نداشته
-# باشد، بی‌سروصدا ساخته می‌شود تا اتصال به پایگاه‌داده با خطا مواجه نشود.
 _db_dir = os.path.dirname(DB_PATH)
 if _db_dir:
     os.makedirs(_db_dir, exist_ok=True)
+
+# مهاجرت یک‌باره و بدون حذف فایل قدیمی: فایل قدیمی را نسبت به محل همین
+# ماژول پیدا می‌کنیم، نه working directory که ممکن است در هاست متفاوت باشد.
+_legacy_db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports.db")
+if (
+    DB_PATH == "/data/reports.db"
+    and not os.path.exists(DB_PATH)
+    and os.path.isfile(_legacy_db_path)
+):
+    shutil.copy2(_legacy_db_path, DB_PATH)
 
 STATUS_RECEIVED = "دریافت شد"
 STATUS_IN_PROGRESS = "در حال رسیدگی"

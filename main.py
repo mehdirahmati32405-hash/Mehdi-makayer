@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
+from sqlite_fsm_storage import SQLiteStorage
 from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
 
 import config
@@ -184,7 +184,7 @@ async def main() -> None:
     init_location_db()
     bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     await set_commands(bot)
-    dispatcher = Dispatcher(storage=MemoryStorage())
+    dispatcher = Dispatcher(storage=SQLiteStorage(db.DB_PATH))
     # Bridge citizen reports and status updates with the municipal Supabase panel.
     dispatcher.callback_query.outer_middleware(PanelSyncMiddleware())
     dispatcher.callback_query.outer_middleware(ConfirmationDedupMiddleware(ttl_seconds=180))

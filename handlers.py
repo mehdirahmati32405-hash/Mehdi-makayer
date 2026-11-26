@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -612,11 +613,22 @@ async def admin_update_status(callback: CallbackQuery, bot: Bot) -> None:
     if new_status is None: await callback.answer("وضعیت نامعتبر است.", show_alert=True); return
     report = db.get_report(report_id)
     if report is None: await callback.answer("این گزارش پیدا نشد.", show_alert=True); return
+    # Repeated taps on the same status must be harmless and must not trigger
+    # Telegram's "message is not modified" error or duplicate citizen notices.
+    if report["status"] == new_status:
+        await callback.answer("این گزارش از قبل در همین وضعیت قرار دارد. ✅")
+        return
+
     db.update_status(report_id, new_status)
     if callback.message is not None:
         code = db.report_code(report_id); from_line = "شهروند ناشناس 🕵️" if report["is_anonymous"] else report["user_name"]
         new_caption = (f"🆘 مورد نیازمند ارجاع به کمک اجتماعی — {code}\n\nتوضیحات: {report['description']}\nاز طرف: {from_line}\nوضعیت: {new_status}\n\nلطفاً برای پیگیری با نهاد حمایتی/بهزیستی هماهنگ شود." if report["category"] == CATEGORIES.get("social_help") else f"🆕 گزارش جدید شهروندی — {code}\n\nدسته‌بندی: {report['category']}\nتوضیحات: {report['description']}\nاز طرف: {from_line}\nوضعیت: {new_status}")
-        await callback.message.edit_text(new_caption, reply_markup=admin_status_keyboard(report_id))
+        try:
+            await callback.message.edit_text(new_caption, reply_markup=admin_status_keyboard(report_id))
+        except TelegramBadRequest as exc:
+            # The database may already match the rendered Telegram message.
+            if "message is not modified" not in str(exc).lower():
+                raise
     try:
         await bot.send_message(chat_id=report["user_id"], text=f"🔔 وضعیت گزارش شما (کد {db.report_code(report_id)}) به‌روزرسانی شد:\nوضعیت جدید: {new_status}")
         if new_status == db.STATUS_DONE: await bot.send_message(chat_id=report["user_id"], text="آیا مشکل واقعاً برطرف شده؟ نظر شما به بهبود کیفیت خدمات کمک می‌کند 🙏", reply_markup=feedback_keyboard(report_id))

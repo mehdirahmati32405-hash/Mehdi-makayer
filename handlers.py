@@ -1,4 +1,5 @@
 from datetime import datetime
+import logging
 from pathlib import Path
 
 from aiogram import Bot, F, Router
@@ -342,19 +343,25 @@ async def process_ai_question(message: Message, state: FSMContext) -> None:
 
     data = await state.get_data()
     history = data.get("ai_history", [])
+    if not isinstance(history, list):
+        history = []
     thinking_msg = await message.answer("در حال بررسی سؤال شما... ⏳")
-    knowledge_text = retrieve_knowledge(question)
-    system_prompt = ai_assistant.build_system_prompt(
-        DUTIES_TEXT,
-        list(CATEGORIES.values()),
-        knowledge_text=knowledge_text,
-    )
-    answer = await ai_assistant.ask_ai(
-        question,
-        config.OPENAI_API_KEY,
-        system_prompt,
-        history=history,
-    )
+    try:
+        knowledge_text = retrieve_knowledge(question)
+        system_prompt = ai_assistant.build_system_prompt(
+            DUTIES_TEXT,
+            list(CATEGORIES.values()),
+            knowledge_text=knowledge_text,
+        )
+        answer = await ai_assistant.ask_ai(
+            question,
+            config.OPENAI_API_KEY,
+            system_prompt,
+            history=history,
+        )
+    except Exception:
+        logging.exception("خطا در آماده‌سازی یا اجرای دستیار هوشمند شهروندی.")
+        answer = ai_assistant.ERROR_MESSAGE
 
     # Keep a short, user-specific conversation context for follow-up questions.
     if answer and answer != ai_assistant.ERROR_MESSAGE and answer != ai_assistant.NOT_CONFIGURED_MESSAGE:
@@ -367,7 +374,12 @@ async def process_ai_question(message: Message, state: FSMContext) -> None:
     # Telegram text messages have a 4096-character limit.
     if len(answer) > 3900:
         answer = answer[:3850].rsplit("\n", 1)[0] + "\n\nادامه پاسخ طولانی بود؛ لطفاً درباره بخش موردنظرتون سؤال تکمیلی بپرسید."
-    await thinking_msg.edit_text(answer)
+    try:
+        await thinking_msg.edit_text(answer)
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc).lower():
+            logging.exception("ارسال پاسخ دستیار هوشمند در تلگرام ناموفق بود.")
+            await message.answer(ai_assistant.ERROR_MESSAGE)
 
 @router.message(AskAIForm.waiting_question, F.chat.type == "private", ~F.text.startswith("/"))
 async def ai_question_invalid(message: Message) -> None:

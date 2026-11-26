@@ -6,6 +6,7 @@ as citizen reports. Each operation opens its own short-lived connection.
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,10 +32,19 @@ class SQLiteStorage(BaseStorage):
                 """
             )
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
+        """Open a short-lived connection and always commit/close it."""
         conn = sqlite3.connect(self.db_path, timeout=15)
         conn.execute("PRAGMA busy_timeout = 15000")
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     @staticmethod
     def _serialize_key(key: StorageKey) -> str:
